@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sio_lio</name>
+  <version>0.0.1</version>
+  <description>2D laser-inertial odometry, teaching project built step by step alongside NdtLIO</description>
+  <maintainer email="zodiac@todo.todo">zodiac</maintainer>
+  <license>TODO: License declaration</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>origincar_msg</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
