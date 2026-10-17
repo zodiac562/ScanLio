@@ -23,6 +23,19 @@ target_include_directories(sio_lio_core PUBLIC ${PROJECT_SOURCE_DIR}/..)
 # 阶段0验证程序：验证 Sophus 编译链接，数值核对第一课练习3
 add_executable(stage0_se2_check src/stage0_se2_check.cpp)
 
+# 阶段1/2 验证程序（此前遗漏登记，2026-10-17 补全）
+add_executable(stage1_static_init_check
+  ${PROJECT_SOURCE_DIR}/../../test/stage1_static_init_check.cpp)
+target_link_libraries(stage1_static_init_check sio_lio_core)
+
+add_executable(stage2_motion_check
+  ${PROJECT_SOURCE_DIR}/../../test/stage2_motion_check.cpp)
+target_link_libraries(stage2_motion_check sio_lio_core)
+
+add_executable(stage2_scan_match_check
+  ${PROJECT_SOURCE_DIR}/../../test/stage2_scan_match_check.cpp)
+target_link_libraries(stage2_scan_match_check sio_lio_core)
+
 # 阶段3冒烟测试：手工构造数据走通 ESKF 五接口（不依赖数据集）
 add_executable(stage3_smoke_test ${PROJECT_SOURCE_DIR}/../../test/stage3_smoke_test.cpp)
 target_link_libraries(stage3_smoke_test sio_lio_core)
@@ -31,7 +44,12 @@ target_link_libraries(stage3_smoke_test sio_lio_core)
 add_executable(stage3_eskf_test ${PROJECT_SOURCE_DIR}/../../test/stage3_eskf_test.cpp)
 target_link_libraries(stage3_eskf_test sio_lio_core)
 
-install(TARGETS stage0_se2_check stage3_smoke_test stage3_eskf_test
+# 阶段4：NDT 三项增强的针对性验证（LRU 一致性/卡方剔除前后对比/SVD 求逆稳健性）
+add_executable(stage4_ndt_enhance_check
+  ${PROJECT_SOURCE_DIR}/../../test/stage4_ndt_enhance_check.cpp)
+target_link_libraries(stage4_ndt_enhance_check sio_lio_core)
+
+install(TARGETS stage0_se2_check stage3_smoke_test stage3_eskf_test stage4_ndt_enhance_check
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
