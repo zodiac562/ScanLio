@@ -59,8 +59,20 @@ namespace sad{
         }
         voxel.points_set_.clear();
 
-        // 信息矩阵 Ω = (Σ + λI)⁻¹，λ = 1e-3 正则化，防止共线点导致 Σ 奇异
-        voxel.info_ = (voxel.sigma_ + Mat2d::Identity() * 1e-3).inverse();
+        if (options_.use_svd_inverse_) {
+            // 信息矩阵 Ω = Σ⁻¹，SVD 稳健求逆：小奇异值钳到最大值的 1e-3，
+            // 防止共线点（如走廊墙面）导致 Σ 病态、求逆发散（对照 NdtLIO ndt_inc.cpp:365-371）
+            Eigen::JacobiSVD<Mat2d> svd(voxel.sigma_, Eigen::ComputeFullU | Eigen::ComputeFullV);
+            Vec2d lambda = svd.singularValues();
+            if (lambda[1] < lambda[0] * 1e-3) {
+                lambda[1] = lambda[0] * 1e-3;
+            }
+            Mat2d inv_lambda = Vec2d(1.0 / lambda[0], 1.0 / lambda[1]).asDiagonal();
+            voxel.info_ = svd.matrixV() * inv_lambda * svd.matrixU().transpose();
+        } else {
+            // 旧实现（仅对照实验用）：Σ + λI 正则化求逆
+            voxel.info_ = (voxel.sigma_ + Mat2d::Identity() * 1e-3).inverse();
+        }
     }
 
     void NDT2D::add_scan(const SE2& pose, const std::vector<Eigen::Vector2d>& scan) {
@@ -79,18 +91,38 @@ namespace sad{
             int gy = (int)std::floor(pw.y() / options_.voxel_size_);
             Vec2i key(gx, gy);
 
-            // operator[]：键不存在时自动创建默认 VoxelGrid 并返回其引用
-            grids_[key].addPoint(pw);
+            // 沿用原版 addScan 的 LRU 写入方式：
+            // 键不存在 → 新体素插入链表头部并登记迭代器；
+            // 键已存在 → 追加点，并把该节点 splice 到头部（表示最近使用）
+            auto iter = grids_.find(key);
+            if (iter == grids_.end()) {
+                data_.push_front({key, VoxelGrid(pw)});
+                grids_.insert({key, data_.begin()});
+            } else {
+                iter->second->second.addPoint(pw);
+                data_.splice(data_.begin(), data_, iter->second);
+                iter->second = data_.begin();   // splice 后更新迭代器指向新位置
+            }
             touched_keys.insert(key);
         }
 
         // 对本帧涉及的每个格子执行生命周期更新（首次生效 / 增量合并 / 冻结跳过）
         for (const auto& key : touched_keys) {
-            update_voxel(grids_[key], first_scan_);
+            update_voxel(grids_[key]->second, first_scan_);
         }
+
+        // 体素容量上限：超过 max_capacity_ 时淘汰最久未更新的体素（原版 capacity_ 机制）
+        evict_if_full();
 
         // 第一帧结束：此后不再处于 first_scan 状态（对照 NdtLIO 的 addScan 行为）
         first_scan_ = false;
+    }
+
+    void NDT2D::evict_if_full() {
+        while (data_.size() >= (size_t)options_.max_capacity_) {
+            grids_.erase(data_.back().first);   // 删除最旧体素的索引（LRU 策略）
+            data_.pop_back();                   // 删除链表尾部数据
+        }
     }
 
     int NDT2D::match(SE2& pose, const std::vector<Eigen::Vector2d>& scan) {
@@ -113,16 +145,24 @@ namespace sad{
                 double best_maha2 = std::numeric_limits<double>::max();
                 for (const auto& key : generate_nearby_grids(Vec2i(gx, gy))) {
                     auto iter_grid = grids_.find(key);
-                    if (iter_grid == grids_.end()) continue;       // 该方向无格子
-                    if (!iter_grid->second.estimate()) continue;   // 格子未生效
-                    Vec2d r = p0 - iter_grid->second.mean_;
-                    double maha2 = r.dot(iter_grid->second.info_ * r);
+                    if (iter_grid == grids_.end()) continue;             // 该方向无格子
+                    VoxelGrid& vg = iter_grid->second->second;           // 迭代器 → 链表节点 → 体素
+                    if (!vg.estimate()) continue;                        // 格子未生效
+                    Vec2d r = p0 - vg.mean_;
+                    double maha2 = r.dot(vg.info_ * r);
                     if (maha2 < best_maha2) {
                         best_maha2 = maha2;
-                        best = &iter_grid->second;
+                        best = &vg;
                     }
                 }
                 if (best == nullptr) continue;   // 周围无任何有效格子
+
+                // 卡方检验离群剔除（对照原版 res_outlier_th_，2 自由度 95% 置信）：
+                // 马氏距离为 nan 或超限时，该点不参与本次迭代——避免外点拉偏高斯-牛顿方向
+                // （nan 检查同样取自原版 ndt_inc.cpp:156/279，防御协方差病态产生的非数值）
+                if (std::isnan(best_maha2) || best_maha2 > options_.res_outlier_th_) {
+                    continue;
+                }
 
                 // 残差与雅可比（第二讲第十节）
                 Vec2d e = p0 - best->mean_;
