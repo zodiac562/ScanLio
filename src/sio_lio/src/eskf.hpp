@@ -1,0 +1,48 @@
+#ifndef ESKF_HPP_
+#define ESKF_HPP_
+
+#include "sio_lio/common/eigen_types.h"
+#include "sio_lio/common/imu.h"
+#include "sio_lio/common/odom.h"
+
+namespace sad{
+
+    class ESKF{
+    public:
+        struct Options{
+            double gyro_var_ = 1e-6;         // 陀螺噪声方差
+            double acce_var_ = 1e-3;         // 加计噪声方差
+            double bias_gyro_var_ = 1e-4;    // 陀螺零偏随机游走方差
+            double bias_acce_var_ = 1e-4;    // 加计零偏随机游走方差
+            double odom_var_ = 0.1;          // 轮速观测噪声
+            double lidar_pos_noise_ = 0.05;  // 雷达位姿观测位置噪声
+            double lidar_ang_noise_ = 0.1;   // 雷达位姿观测角度噪声
+            double imu_dt_ = 0.01;           // IMU 采样间隔
+        };
+
+        ESKF()=default;
+        explicit ESKF(const Options& options) : options_(options) {}
+
+        void SetInitCondition(double bg,const Vec2d& ba);
+        void Predict(const Imu& imu);
+        void ObserveOdom(const Odom& odom);
+        void ObserveLidar(const SE2& lidar_pose);
+        SE2 GetNominalPose() const;
+
+    private:
+        Vec2d p_ = Vec2d::Zero();
+        Vec2d v_ = Vec2d::Zero();
+        double theta_ = 0.0;
+        Vec2d ba_ = Vec2d::Zero();
+        double bg_ = 0.0;
+
+        Mat8d P_ = Mat8d::Identity();    // 误差协方差
+
+        Options options_;
+        double last_imu_time_ = 0.0;     // 上一条 IMU 时间戳
+        bool inited_ = false;
+    };
+}
+
+#endif
+
