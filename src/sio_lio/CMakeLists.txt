@@ -35,7 +35,7 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # 阶段2/3/4：2D NDT 配准与 ESKF 滤波核心 + 地图管理 + 前端调度（静态库，后续前端模块复用）
 add_library(sio_lio_core STATIC
-  src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/frontend.cpp src/config.cpp)
+  src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/occupancy_map.cpp src/frontend.cpp src/config.cpp)
 target_include_directories(sio_lio_core PUBLIC ${PROJECT_SOURCE_DIR}/..)
 target_link_libraries(sio_lio_core PUBLIC yaml-cpp)
 
@@ -127,6 +127,8 @@ if(SIO_LIO_WITH_TESTS)
   sio_lio_add_test(stage4_ab_5way)
   sio_lio_add_test(stage4_traj_dump)
   sio_lio_add_test(stage4_undistort_effect_check)
+  # 只读接口：ESKF 协方差 / 体素中心 / 占据栅格
+  sio_lio_add_test(stage4_api_check)
   # 统一配置解析器
   sio_lio_add_test(config_check)
 else()

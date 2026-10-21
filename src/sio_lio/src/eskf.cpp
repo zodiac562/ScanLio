@@ -177,4 +177,8 @@ SE2 ESKF::GetNominalPose() const {
     return SE2(SO2(theta_), p_);
 }
 
+Mat8d ESKF::GetP() const {
+    return P_;
+}
+
 }  // namespace sad

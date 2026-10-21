@@ -75,6 +75,15 @@ namespace sad{
         size_t num_voxels() const { return data_.size(); }
         size_t num_indexed() const { return grids_.size(); }
 
+        /*
+        只读观测接口：导出全部「已生效」体素的中心坐标（世界系，单位米）
+        - 已生效 = ndt_estimated_ 为 true，即累计点数达到 min_pts_num_、均值与协方差已算出。
+          未生效体素的 mean_ 仍是零向量，导出会在原点处产生一批虚假点，故不导出。
+        - 返回值的数量可能小于 num_voxels()，差值即尚未生效的体素数。
+        - 遍历顺序为 LRU 链表的当前顺序（最近更新的体素在前），同一输入序列下顺序固定。
+        */
+        std::vector<Vec2d> get_voxels() const;
+
         
         private:
 

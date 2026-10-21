@@ -62,6 +62,7 @@ Frontend::Options Config::ToFrontendOptions() const {
     Frontend::Options fo = frontend;      // 取 5 个自有字段
     fo.eskf_opts_ = eskf;                 // 注入滤波参数
     fo.map_opts_.ndt_opts_ = ndt;         // 注入配准参数
+    fo.map_opts_.occu_opts_ = occu;       // 注入占据栅格参数
     return fo;
 }
 
@@ -78,8 +79,8 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
         return false;
     }
 
-    // 顶层只允许 init / eskf / ndt / frontend 四个段
-    if (!CheckKeys(root, "根节点", {"init", "eskf", "ndt", "frontend"}, err)) {
+    // 顶层只允许 init / eskf / ndt / map / frontend 五个段
+    if (!CheckKeys(root, "根节点", {"init", "eskf", "ndt", "map", "frontend"}, err)) {
         return false;
     }
 
@@ -126,6 +127,13 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     ndt.res_outlier_th_ = GetD(nn, "res_outlier_th", ndt.res_outlier_th_);
     ndt.use_svd_inverse_ = GetB(nn, "use_svd_inverse", ndt.use_svd_inverse_);
 
+    // ---- map：占据栅格参数 ----
+    if (!CheckKeys(root["map"], "map", {"occupancy_resolution"}, err)) {
+        return false;
+    }
+    const YAML::Node nm = root["map"];
+    occu.resolution_ = GetD(nm, "occupancy_resolution", occu.resolution_);
+
     // ---- frontend：调度参数 ----
     if (!CheckKeys(root["frontend"], "frontend",
                    {"keyframe_dist_th", "keyframe_rot_th_deg", "imu_buffer_size",
@@ -158,6 +166,11 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     }
     if (ndt.max_pts_num_ < ndt.min_pts_num_) {
         if (err) *err = "ndt.max_pts_num 不得小于 min_pts_num";
+        return false;
+    }
+    if (occu.resolution_ <= 0.0) {
+        // 栅格边长为 0 或负数时射线追踪无法产生有效格子索引
+        if (err) *err = "map.occupancy_resolution 必须为正";
         return false;
     }
     if (eskf.odom_var_ <= 0.0 || eskf.lidar_pos_noise_ <= 0.0 ||
@@ -197,6 +210,8 @@ std::string Config::ToYamlString() const {
     os << "  eps: " << ndt.eps_ << "\n";
     os << "  res_outlier_th: " << ndt.res_outlier_th_ << "\n";
     os << "  use_svd_inverse: " << (ndt.use_svd_inverse_ ? "true" : "false") << "\n";
+    os << "map:\n";
+    os << "  occupancy_resolution: " << occu.resolution_ << "\n";
     os << "frontend:\n";
     os << "  keyframe_dist_th: " << frontend.keyframe_dist_th_ << "\n";
     os << "  keyframe_rot_th_deg: " << frontend.keyframe_rot_th_ * 180.0 / M_PI << "\n";

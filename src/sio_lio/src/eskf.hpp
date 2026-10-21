@@ -29,6 +29,13 @@ namespace sad{
         void ObserveLidar(const SE2& lidar_pose);
         SE2 GetNominalPose() const;
 
+        // 后验误差协方差（8x8，按值返回）。
+        // 各分量的行列顺序与误差状态一致：0~1 = p_x,p_y；2~3 = v_x,v_y；4 = theta；
+        // 5 = bg（陀螺 z 轴零偏）；6~7 = ba_x,ba_y（加计 xy 零偏）。
+        // 用途：发布位姿协方差、观察各状态的可观测性变化。返回值是副本，
+        // 修改它不会影响滤波器内部状态。
+        Mat8d GetP() const;
+
     private:
         Vec2d p_ = Vec2d::Zero();
         Vec2d v_ = Vec2d::Zero();

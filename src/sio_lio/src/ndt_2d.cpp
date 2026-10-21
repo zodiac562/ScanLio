@@ -118,6 +118,19 @@ namespace sad{
         first_scan_ = false;
     }
 
+    std::vector<Vec2d> NDT2D::get_voxels() const {
+        std::vector<Vec2d> centers;
+        centers.reserve(data_.size());
+        for (const auto& kv : data_) {
+            // 只导出已生效体素：未生效体素的 mean_ 为零向量，导出会产生原点处的虚假点
+            if (!kv.second.ndt_estimated_) {
+                continue;
+            }
+            centers.push_back(kv.second.mean_);
+        }
+        return centers;
+    }
+
     void NDT2D::evict_if_full() {
         while (data_.size() >= (size_t)options_.max_capacity_) {
             grids_.erase(data_.back().first);   // 删除最旧体素的索引（LRU 策略）

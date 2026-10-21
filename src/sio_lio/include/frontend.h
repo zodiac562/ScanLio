@@ -46,6 +46,13 @@ class Frontend {
     // 当前位姿（来自 ESKF 名义状态）
     SE2 GetPose() const;
 
+    // 内部地图的只读/读写访问（对应原版 IncrementalNDTLO::getMap）。
+    // 用途：外部读取体素坐标与占据栅格以发布可视化话题，或在关键帧之外补写占据栅格。
+    // 注意：对返回的 Map 调用 add_keyframe / match 会改变前端状态，
+    // 只应在两次 ProcessScan 之间、且调用方清楚后果时使用。
+    Map& GetMap() { return *map_; }
+    const Map& GetMap() const { return *map_; }
+
     // 静态初始化（阶段 1 产物传入）：透传给内部 ESKF
     void SetInitCondition(double bg, const Vec2d& ba);
 

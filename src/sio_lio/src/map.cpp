@@ -11,6 +11,13 @@ void Map::add_keyframe(const std::shared_ptr<Frame>& frame) {
     ndt_.add_scan(frame->pose_, frame->pts_);
 }
 
+// 一帧点云写入占据栅格：按本帧位姿做射线追踪
+void Map::add_scan_to_occupancy_map(const std::shared_ptr<Frame>& frame) {
+    // 与 add_keyframe 相同的约束：frame->pose_ 必须是世界系位姿。
+    // 这里传入的是「去畸变之后」的 pts_，与 NDT 配准使用的是同一份点云。
+    occu_map_.add_scan(frame->pose_, frame->pts_);
+}
+
 // 用当前地图配准：给定初值 pose，返回配准后位姿与配准是否成功
 bool Map::match(std::shared_ptr<Frame> frame, SE2& pose) {
     // pose 传入时为初值（来自 ESKF 预测，世界系位姿）；

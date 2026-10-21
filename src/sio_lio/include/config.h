@@ -30,6 +30,11 @@ struct Config {
     // ---- 配准与地图（NDT2D::Options，Map 内部只有一个 NDT2D）----
     NDT2D::Options ndt;
 
+    // ---- 占据栅格（OccupancyMap::Options，Map 内部各持有一个）----
+    // 与 ndt 分开成一段的原因：栅格分辨率与配准的体素边长是两个独立量，
+    // 前者只影响显示与导出，后者影响配准结果。
+    OccupancyMap::Options occu;
+
     // ---- 前端调度（Frontend::Options 的 5 个自有字段）----
     // 说明：frontend 中另有 eskf_opts_ / map_opts_，由本结构另行填充，
     // yaml 不重复配置，以免两处写法不一致。
