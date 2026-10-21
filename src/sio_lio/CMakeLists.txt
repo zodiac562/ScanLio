@@ -58,6 +58,11 @@ add_executable(stage4_map_check
   ${PROJECT_SOURCE_DIR}/../../test/stage4_map_check.cpp)
 target_link_libraries(stage4_map_check sio_lio_core)
 
+# 阶段4 任务F：可视化地图数据生成（Frontend 管线 + 射线追踪占据栅格）
+add_executable(stage4_map_gen
+  ${PROJECT_SOURCE_DIR}/../../test/stage4_map_gen.cpp)
+target_link_libraries(stage4_map_gen sio_lio_core)
+
 # 阶段4 验收：完整 LIO 管线（Frontend）在真实数据上的多数据集验证
 add_executable(stage4_lio_check
   ${PROJECT_SOURCE_DIR}/../../test/stage4_lio_check.cpp)
