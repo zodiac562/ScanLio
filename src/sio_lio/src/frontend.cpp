@@ -92,11 +92,12 @@ void Frontend::SetInitCondition(double bg, const Vec2d& ba) {
 }
 
 // 去畸变实现：
-//   1. 帧内第 i 个点的采样时刻 t_i = 帧起始 + i × 单束周期
-//      （单束周期由「上一帧与本帧的时间差 ÷ 点数」推算，雷达匀速旋转）
-//   2. 在 imu_buffer_ 中找 t_i 附近的两条位姿，线性插值出该时刻的车体位姿
-//   3. 点补偿：p_out = T_end^-1 * T_i * p_raw
-//      （把点从「t_i 时刻的车体系」搬到「帧尾时刻的车体系」）
+//   1. 逐点采集时刻直接取自 frame->pts_time_（导出层按消息自带的
+//      time_increment 与原始 ranges 索引算出），本函数不做任何均匀性假设。
+//   2. 基准时刻 t_ref = frame->timestamp_（LaserScan.header.stamp，扫描结束）。
+//   3. 在 imu_buffer_ 中找 t_i 所在区间，位置线性插值、角度先折短弧再加权。
+//   4. 点补偿：p_out = T_ref^-1 * T_i * p_raw
+//      （把点从「t_i 时刻的车体系」搬到「t_ref 时刻的车体系」）
 bool Frontend::UndistortScan(const std::shared_ptr<Frame>& frame) {
     // 缓冲不足两条无法插值
     if (imu_buffer_.size() < 2) {
@@ -108,45 +109,58 @@ bool Frontend::UndistortScan(const std::shared_ptr<Frame>& frame) {
         return false;
     }
 
-    // 帧起始时刻（timestamp_ 语义）与帧结束时刻
-    const double t_start = frame->timestamp_;
-    const double t_end   = imu_buffer_.back().first;
-
-    // 单束周期：帧时长 ÷ 点数
-    const double dt_beam = (t_end - t_start) / (double)n;
-    if (dt_beam <= 0.0) {
+    // 逐点时刻必须与点云一一对应，否则说明导出层未提供时间信息
+    if (frame->pts_time_.size() != n) {
         return false;
     }
 
-    // 帧尾时刻的车体位姿（补偿目标基准）
-    const SE2& T_end = imu_buffer_.back().second;
+    // 补偿目标基准：缓冲最新位姿。其时刻距 t_ref 不超过一个 IMU 周期
+    // （约 0.01 s，实测中位数 5 ms），作为 t_ref 时刻位姿的近似。
+    const SE2& T_ref = imu_buffer_.back().second;
+    const double t_buf_end = imu_buffer_.back().first;
+    const SE2 T_ref_inv = T_ref.inverse();
 
     // 逐点补偿
     for (size_t i = 0; i < n; ++i) {
-        const double t_i = t_start + dt_beam * (double)i;
+        const double t_i = frame->pts_time_[i];
 
-        // 在缓冲中找 t_i 的插值区间：prev.t <= t_i <= next.t
+        // t_i 晚于缓冲末端：用最新位姿代替（偏差至多一个 IMU 周期），
+        // 此时 T_i = T_ref，该点补偿后退化为原值
+        if (t_i >= t_buf_end) {
+            frame->pts_[i] = T_ref_inv * (T_ref * frame->pts_[i]);
+            continue;
+        }
+
+        // 在缓冲中找 t_i 的插值区间：prev.t <= t_i < next.t
         auto next = imu_buffer_.begin();
         auto prev = next;
-        while (next != imu_buffer_.end() && next->first < t_i) {
+        while (next != imu_buffer_.end() && next->first <= t_i) {
             prev = next;
             ++next;
         }
         if (next == imu_buffer_.begin() || next == imu_buffer_.end()) {
-            continue;   // t_i 超出缓冲覆盖范围，该点不补偿（保持原值）
+            continue;   // t_i 早于缓冲最早记录，该点不补偿（保持原值）
         }
 
-        // 线性插值：位置按比例，角度按差值的比例（短区间内角度无周期跳变问题，
-        // 因相邻 IMU 位姿差远小于 π）
-        const double alpha = (t_i - prev->first) / (next->first - prev->first);
+        const double dt_pair = next->first - prev->first;
+        if (dt_pair <= 0.0) {
+            continue;   // 时间戳重复，无法插值
+        }
+
+        // 位置按比例插值；角度先折到短弧再加权（SO2::log 值域 (-π, π]，
+        // 累计朝向跨越 ±π 时直接加权会把朝向算成反向）
+        const double alpha = (t_i - prev->first) / dt_pair;
         Vec2d trans = prev->second.translation() * (1.0 - alpha) +
                       next->second.translation() * alpha;
-        double theta = prev->second.so2().log() * (1.0 - alpha) +
-                       next->second.so2().log() * alpha;
-        SE2 T_i(SO2(theta), trans);
+        const double th_prev = prev->second.so2().log();
+        double dth = next->second.so2().log() - th_prev;
+        while (dth > M_PI) dth -= 2.0 * M_PI;
+        while (dth <= -M_PI) dth += 2.0 * M_PI;
+        const double theta = th_prev + dth * alpha;
+        const SE2 T_i(SO2(theta), trans);
 
-        // 补偿：从 t_i 时刻车体系 → 世界系 → 帧尾时刻车体系
-        frame->pts_[i] = T_end.inverse() * T_i * frame->pts_[i];
+        // 补偿：从 t_i 时刻车体系 → 世界系 → t_ref 时刻车体系
+        frame->pts_[i] = T_ref_inv * T_i * frame->pts_[i];
     }
     return true;
 }
