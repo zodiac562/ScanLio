@@ -5,9 +5,17 @@
 //   /robotvel origincar_msg/Data    → Frontend::ProcessOdom → ESKF 轮速观测
 //   /scan     sensor_msgs/LaserScan → Frame → Frontend::ProcessScan → 配准 + 修正
 // 输出：
-//   /trajectory  nav_msgs/Path        每成功配准一帧追加一个位姿（关键帧与非关键帧都发）
-//   /tf          map → base           每成功配准一帧发布一次
-//   /tf_static   base → laser / imu   定时重发（2 s），与驱动侧坐标系保持同一假设
+//   /trajectory          nav_msgs/Path        每成功配准一帧追加一个位姿（关键帧与非关键帧都发）
+//   /tf                  map → base           每成功配准一帧发布一次
+//   /tf_static           base → laser / imu   定时重发（2 s），与驱动侧坐标系保持同一假设
+//   /map                 nav_msgs/OccupancyGrid    定时发布（publish_period_ms，默认 1 s）
+//   /global_point_cloud  sensor_msgs/PointCloud2   定时发布，内容为已生效体素的中心
+//   /sio_lio/pose_with_covariance                 每成功配准一帧发布一次，携带 ESKF 后验协方差
+//
+// 三项可视化输出的数据来源都是核心库的只读接口，节点不自行计算：
+//   占据栅格 → Map::occupancy_map() 的 bounds/probability
+//   体素点云 → NDT2D::get_voxels()
+//   位姿协方差 → ESKF::GetP()
 //
 // 调度方式（关键设计）：三个话题的消息先进入按（时间戳, 类型）排序的缓冲，再按
 // 时间顺序处理，而不是「谁的回调先被触发就先处理谁」。
@@ -20,12 +28,8 @@
 //   以此等待可能迟到但时间更早的消息。代价是引入 reorder_margin 的固定时延。
 //
 // 线程模型：单线程执行器（rclcpp::spin）。所有处理都在同一个线程，Frontend 内部
-// 状态只被一个线程访问，不需要加锁。
-//
-// 本节点不输出占据栅格（/map）与全局体素点云：
-//   核心 Map/NDT2D 没有暴露体素坐标与占据栅格的只读接口，占据栅格模块目前只
-//   存在于 test/stage4_map_gen.cpp（未进核心）。补这两项需要先改 Zodiac 手写
-//   的 NDT2D/Map 接口，故本节点暂不实现，已记入 doc/项目挂起/。
+// 状态只被一个线程访问，不需要加锁。栅格与点云的定时发布也在同一线程内，
+// 与配准串行执行，因此不需要对 Map 加锁。
 
 #include "sio_lio/common/imu.h"
 #include "sio_lio/common/odom.h"
@@ -35,12 +39,16 @@
 #include "sio_lio/include/frontend.h"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <origincar_msg/msg/data.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <tf2_ros/static_transform_broadcaster.hpp>
 #include <tf2_ros/transform_broadcaster.hpp>
 
@@ -52,6 +60,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -100,6 +109,20 @@ class SioLioNode : public rclcpp::Node {
             this->declare_parameter<std::string>("odom_topic", "/robotvel");
         const std::string traj_topic =
             this->declare_parameter<std::string>("trajectory_topic", "/trajectory");
+
+        // ---- 三项可视化输出 ----
+        // 开关与话题名分开声明：便于在同一张地图上并排对比「开/关」两种配置，
+        // 也便于回放时避免与数据包内录制的同名话题冲突。
+        publish_occupancy_ = this->declare_parameter<bool>("publish_occupancy", true);
+        const std::string occ_topic = this->declare_parameter<std::string>("occupancy_topic", "/map");
+        publish_cloud_ = this->declare_parameter<bool>("publish_cloud", true);
+        const std::string cloud_topic =
+            this->declare_parameter<std::string>("cloud_topic", "/global_point_cloud");
+        publish_pose_cov_ = this->declare_parameter<bool>("publish_pose_cov", true);
+        const std::string pose_cov_topic = this->declare_parameter<std::string>(
+            "pose_cov_topic", "/sio_lio/pose_with_covariance");
+        const int publish_period_ms = this->declare_parameter<int>("publish_period_ms", 1000);
+
         map_frame_ = this->declare_parameter<std::string>("map_frame", "map");
         base_frame_ = this->declare_parameter<std::string>("base_frame", "base");
         laser_frame_ = this->declare_parameter<std::string>("laser_frame", "laser");
@@ -141,6 +164,26 @@ class SioLioNode : public rclcpp::Node {
         trajectory_.header.frame_id = map_frame_;
         path_pub_ = this->create_publisher<nav_msgs::msg::Path>(traj_topic, rclcpp::QoS(10));
 
+        if (publish_occupancy_) {
+            // TRANSIENT_LOCAL + RELIABLE：后启动的 rviz2 或 nav2 也能立刻收到最新地图。
+            // 深度 1 足够，地图是全量快照，旧快照没有保留价值。
+            rclcpp::QoS map_qos(1);
+            map_qos.reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE);
+            map_qos.durability(RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+            map_qos.history(RMW_QOS_POLICY_HISTORY_KEEP_LAST);
+            occ_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(occ_topic, map_qos);
+        }
+        if (publish_cloud_) {
+            // 点云每期都是全量快照，用 volatile（不要 latched）：体积随地图增长，
+            // 缓存旧快照会长期占用内存，而对后启动的订阅者来说旧点云价值低。
+            cloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+                cloud_topic, rclcpp::QoS(1));
+        }
+        if (publish_pose_cov_) {
+            pose_cov_pub_ = this->create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
+                pose_cov_topic, rclcpp::QoS(10));
+        }
+
         tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
         tf_static_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(*this);
 
@@ -161,9 +204,25 @@ class SioLioNode : public rclcpp::Node {
                 std::chrono::seconds(2), std::bind(&SioLioNode::PublishStaticTf, this));
         }
 
-        RCLCPP_INFO(this->get_logger(), "订阅：%s / %s / %s；轨迹发布：%s；排序缓冲 %.3f s",
-                    imu_topic.c_str(), odom_topic.c_str(), scan_topic.c_str(), traj_topic.c_str(),
-                    reorder_margin_);
+        // ---- 6. 栅格与点云的定时发布 ----
+        // 用 wall_timer 而非跟随帧：地图是全量快照，按固定周期发布使带宽可预期，
+        // 也让下游（rviz2、nav2）拿到稳定的刷新节奏，与帧率无关。
+        if ((publish_occupancy_ || publish_cloud_) && publish_period_ms > 0) {
+            const auto period = std::chrono::milliseconds(publish_period_ms);
+            map_timer_ = this->create_wall_timer(period, std::bind(&SioLioNode::PublishMapTick, this));
+        } else if (publish_period_ms <= 0) {
+            RCLCPP_WARN(this->get_logger(),
+                        "publish_period_ms = %d 非正，栅格与点云不发布", publish_period_ms);
+        }
+
+        RCLCPP_INFO(this->get_logger(),
+                    "订阅：%s / %s / %s；轨迹发布：%s；排序缓冲 %.3f s", imu_topic.c_str(),
+                    odom_topic.c_str(), scan_topic.c_str(), traj_topic.c_str(), reorder_margin_);
+        RCLCPP_INFO(this->get_logger(),
+                    "输出：栅格=%s(%s) 点云=%s(%s) 协方差=%s(%s) 周期=%d ms",
+                    occ_topic.c_str(), publish_occupancy_ ? "开" : "关", cloud_topic.c_str(),
+                    publish_cloud_ ? "开" : "关", pose_cov_topic.c_str(),
+                    publish_pose_cov_ ? "开" : "关", publish_period_ms);
     }
 
     ~SioLioNode() override {
@@ -172,8 +231,29 @@ class SioLioNode : public rclcpp::Node {
         FlushPending();
         RCLCPP_INFO(this->get_logger(),
                     "退出统计：IMU %zu 条，轮速 %zu 条，雷达帧 %zu，配准成功 %zu，配准失败 %zu，"
-                    "有效点不足跳过 %zu",
-                    imu_count_, odom_count_, frame_total_, frame_ok_, frame_fail_, frame_skipped_);
+                    "有效点不足跳过 %zu，无逐点时刻 %zu",
+                    imu_count_, odom_count_, frame_total_, frame_ok_, frame_fail_, frame_skipped_,
+                    frame_no_time_);
+        // 发布开销：栅格与点云的构造耗时（不含 DDS 序列化与传输）
+        if (occ_cost_count_ > 0) {
+            RCLCPP_INFO(this->get_logger(), "栅格发布开销：%zu 次，平均 %.2f ms，最大 %.2f ms",
+                        occ_cost_count_, occ_cost_total_ms_ / static_cast<double>(occ_cost_count_),
+                        occ_cost_max_ms_);
+        }
+        if (cloud_cost_count_ > 0) {
+            RCLCPP_INFO(this->get_logger(), "点云发布开销：%zu 次，平均 %.2f ms，最大 %.2f ms",
+                        cloud_cost_count_, cloud_cost_total_ms_ / static_cast<double>(cloud_cost_count_),
+                        cloud_cost_max_ms_);
+        }
+        // 地图规模：用于核对 /global_point_cloud 与 /map 的内容是否与内部状态一致
+        if (frontend_) {
+            RCLCPP_INFO(this->get_logger(),
+                        "地图统计：关键帧 %zu，体素 %zu（已生效 %zu），占据栅格格子 %zu",
+                        frontend_->GetMap().num_keyframes(),
+                        frontend_->GetMap().ndt().num_voxels(),
+                        frontend_->GetMap().ndt().get_voxels().size(),
+                        frontend_->GetMap().occupancy_map().num_cells());
+        }
     }
 
    private:
@@ -373,11 +453,17 @@ class SioLioNode : public rclcpp::Node {
             ++frame_skipped_;
             return;
         }
-        if (!has_time_increment && !undistort_warned_) {
-            undistort_warned_ = true;
-            RCLCPP_WARN(this->get_logger(),
-                        "LaserScan.time_increment 为 0，逐点时刻无法计算，去畸变对本帧不生效"
-                        "（检查驱动是否填写该字段）");
+        if (!has_time_increment) {
+            // 驱动/记录环节偶尔会写出 time_increment = 0 的帧（实测数据包中存在）。
+            // 这类帧的点云不带逐点时刻，UndistortScan 会因 pts_time_ 与 pts_ 数量不符而
+            // 直接返回，等价于本帧不做补偿。计入统计并在退出时报告总数。
+            ++frame_no_time_;
+            if (!undistort_warned_) {
+                undistort_warned_ = true;
+                RCLCPP_WARN(this->get_logger(),
+                            "LaserScan.time_increment 为 0，逐点时刻无法计算，去畸变对这类帧不生效"
+                            "（检查驱动是否填写该字段；累计数量在退出统计中报告）");
+            }
         }
 
         const bool ok = frontend_->ProcessScan(frame);
@@ -397,10 +483,21 @@ class SioLioNode : public rclcpp::Node {
             return;
         }
         ++frame_ok_;
+        map_stamp_ = t;   // 栅格与点云消息的时间戳，取最近一帧成功配准的扫描时刻
+
+        // 占据栅格每帧写入：写入不改变配准与位姿（栅格只被读来发布），
+        // 因此可以比 NDT 体素（只在关键帧写）更密，让墙角与窄缝更快收敛。
+        // 位置放在位姿确定之后、发布之前，保证本帧消息携带的是已含本帧的栅格。
+        if (publish_occupancy_) {
+            frontend_->GetMap().add_scan_to_occupancy_map(frame);
+        }
 
         PublishTrajectory(frame->pose_, t);
         if (publish_tf_) {
             tf_broadcaster_->sendTransform(MakeTransform(map_frame_, base_frame_, t, frame->pose_));
+        }
+        if (publish_pose_cov_) {
+            PublishPoseCov(frame->pose_, t);
         }
     }
 
@@ -428,6 +525,144 @@ class SioLioNode : public rclcpp::Node {
         ps.pose.orientation.w = std::cos(theta * 0.5);
         trajectory_.poses.push_back(ps);
         path_pub_->publish(trajectory_);
+    }
+
+    // 定时发布栅格与点云。两者都是「全量快照」，因此共用同一周期。
+    void PublishMapTick() {
+        if (!init_ready_) {
+            return;   // 静止初始化阶段尚未写入任何数据
+        }
+        // 计时：用于量化发布开销是否影响配准节奏。同线程串行执行，
+        // 这段时间内不处理消息，故必须记录最大值。
+        if (publish_occupancy_) {
+            const auto t0 = std::chrono::steady_clock::now();
+            PublishOccupancyGrid();
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - t0).count();
+            occ_cost_total_ms_ += ms;
+            if (ms > occ_cost_max_ms_) occ_cost_max_ms_ = ms;
+            ++occ_cost_count_;
+        }
+        if (publish_cloud_) {
+            const auto t0 = std::chrono::steady_clock::now();
+            PublishVoxelCloud();
+            const double ms = std::chrono::duration<double, std::milli>(
+                                  std::chrono::steady_clock::now() - t0).count();
+            cloud_cost_total_ms_ += ms;
+            if (ms > cloud_cost_max_ms_) cloud_cost_max_ms_ = ms;
+            ++cloud_cost_count_;
+        }
+    }
+
+    // 占据栅格：按当前地图的包围盒裁剪后整幅发布
+    void PublishOccupancyGrid() {
+        const sad::OccupancyMap& occ = frontend_->GetMap().occupancy_map();
+        if (occ.num_cells() == 0) {
+            return;   // 还没有任何射线，发布全未知的地图没有信息量
+        }
+
+        int min_gx = 0, min_gy = 0, max_gx = 0, max_gy = 0;
+        if (!occ.bounds(&min_gx, &min_gy, &max_gx, &max_gy)) {
+            return;
+        }
+        const int64_t width = static_cast<int64_t>(max_gx) - min_gx + 1;
+        const int64_t height = static_cast<int64_t>(max_gy) - min_gy + 1;
+
+        // 分配上限：20M 格（data 为 int8，约 20 MB）。超限说明包围盒被远处的孤立
+        // 点撑大，此时发布整幅图的开销超过收益，跳过并告警由人工判断。
+        const int64_t kMaxCells = 20000000;
+        if (width <= 0 || height <= 0 || width * height > kMaxCells) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                                 "占据栅格包围盒 %ldx%ld 超出发布上限，跳过本次发布", width, height);
+            return;
+        }
+
+        nav_msgs::msg::OccupancyGrid msg;
+        msg.header.frame_id = map_frame_;
+        msg.header.stamp = SecToStamp(map_stamp_);
+        msg.info.resolution = static_cast<float>(occ.resolution());
+        msg.info.width = static_cast<uint32_t>(width);
+        msg.info.height = static_cast<uint32_t>(height);
+        // 栅格左下角的世界系坐标：格 (gx, gy) 覆盖 [gx*res, (gx+1)*res)
+        msg.info.origin.position.x = static_cast<double>(min_gx) * occ.resolution();
+        msg.info.origin.position.y = static_cast<double>(min_gy) * occ.resolution();
+        msg.info.origin.position.z = 0.0;
+        msg.info.origin.orientation.w = 1.0;
+
+        // ROS 的存储顺序为行主序，index = x_local + y_local * width，
+        // 即行号对应 y、列号对应 x。未观测格 probability() 返回 -1，
+        // 与 ROS 约定的未知格取值一致，因此直接搬用。
+        msg.data.assign(static_cast<size_t>(width * height), -1);
+        for (int gy = min_gy; gy <= max_gy; ++gy) {
+            const int y_local = gy - min_gy;
+            for (int gx = min_gx; gx <= max_gx; ++gx) {
+                const int x_local = gx - min_gx;
+                const int p = occ.probability(gx, gy);
+                if (p >= 0) {
+                    msg.data[static_cast<size_t>(x_local) +
+                             static_cast<size_t>(y_local) * static_cast<size_t>(width)] =
+                        static_cast<int8_t>(p);
+                }
+            }
+        }
+
+        occ_pub_->publish(msg);
+    }
+
+    // 全局体素点云：只发已生效体素的中心，用来观察「地图长到哪里、密度如何」
+    void PublishVoxelCloud() {
+        const std::vector<Vec2d> centers = frontend_->GetMap().ndt().get_voxels();
+
+        sensor_msgs::msg::PointCloud2 msg;
+        msg.header.frame_id = map_frame_;
+        msg.header.stamp = SecToStamp(map_stamp_);
+        msg.height = 1;
+        msg.width = static_cast<uint32_t>(centers.size());
+        msg.is_bigendian = false;
+        msg.is_dense = true;   // 体素中心一定是有限值，没有 NaN
+
+        // 用 Modifier 声明字段与容量，再用迭代器写值，避免手工算偏移
+        sensor_msgs::PointCloud2Modifier modifier(msg);
+        modifier.setPointCloud2FieldsByString(1, "xyz");
+        modifier.resize(centers.size());
+
+        sensor_msgs::PointCloud2Iterator<float> it_x(msg, "x");
+        sensor_msgs::PointCloud2Iterator<float> it_y(msg, "y");
+        sensor_msgs::PointCloud2Iterator<float> it_z(msg, "z");
+        for (size_t i = 0; i < centers.size(); ++i, ++it_x, ++it_y, ++it_z) {
+            *it_x = static_cast<float>(centers[i].x());
+            *it_y = static_cast<float>(centers[i].y());
+            *it_z = 0.0f;
+        }
+
+        cloud_pub_->publish(msg);
+    }
+
+    // 位姿协方差：只填 x、y、yaw 三个对角元，其余为 0
+    void PublishPoseCov(const SE2& pose, double t) {
+        const Mat8d P = frontend_->GetP();
+
+        geometry_msgs::msg::PoseWithCovarianceStamped msg;
+        msg.header.frame_id = map_frame_;
+        msg.header.stamp = SecToStamp(t);
+        msg.pose.pose.position.x = pose.translation().x();
+        msg.pose.pose.position.y = pose.translation().y();
+        msg.pose.pose.position.z = 0.0;
+        const double theta = pose.so2().log();
+        msg.pose.pose.orientation.x = 0.0;
+        msg.pose.pose.orientation.y = 0.0;
+        msg.pose.pose.orientation.z = std::sin(theta * 0.5);
+        msg.pose.pose.orientation.w = std::cos(theta * 0.5);
+
+        // covariance 为 6x6 行主序：索引 = 行*6 + 列。
+        // 分量顺序为 x, y, z, rot_x, rot_y, rot_z，故 (x,x)=0、(y,y)=7、(rot_z,rot_z)=35。
+        // 本项目为平面运动，z、roll、pitch 不参与估计，保持 0。
+        msg.pose.covariance.fill(0.0);
+        msg.pose.covariance[0] = P(0, 0);    // x
+        msg.pose.covariance[7] = P(1, 1);    // y
+        msg.pose.covariance[35] = P(4, 4);   // yaw
+
+        pose_cov_pub_->publish(msg);
     }
 
     void PublishStaticTf() {
@@ -461,15 +696,33 @@ class SioLioNode : public rclcpp::Node {
     bool publish_tf_ = true;
     bool publish_static_tf_ = true;
 
+    // 三项可视化输出的开关
+    bool publish_occupancy_ = true;
+    bool publish_cloud_ = true;
+    bool publish_pose_cov_ = true;
+    double map_stamp_ = 0.0;   // 最近一帧成功配准的扫描时刻，用于栅格与点云消息头
+
     nav_msgs::msg::Path trajectory_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr occ_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_cov_pub_;
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     std::unique_ptr<tf2_ros::StaticTransformBroadcaster> tf_static_broadcaster_;
     rclcpp::TimerBase::SharedPtr static_tf_timer_;
+    rclcpp::TimerBase::SharedPtr map_timer_;
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<origincar_msg::msg::Data>::SharedPtr odom_sub_;
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
+
+    // ---- 发布开销统计（毫秒）----
+    double occ_cost_total_ms_ = 0.0;
+    double occ_cost_max_ms_ = 0.0;
+    size_t occ_cost_count_ = 0;
+    double cloud_cost_total_ms_ = 0.0;
+    double cloud_cost_max_ms_ = 0.0;
+    size_t cloud_cost_count_ = 0;
 
     // ---- 统计 ----
     size_t imu_count_ = 0;
@@ -478,6 +731,7 @@ class SioLioNode : public rclcpp::Node {
     size_t frame_ok_ = 0;
     size_t frame_fail_ = 0;
     size_t frame_skipped_ = 0;
+    size_t frame_no_time_ = 0;   // time_increment 为 0、无法去畸变的帧数
 };
 
 int main(int argc, char** argv) {

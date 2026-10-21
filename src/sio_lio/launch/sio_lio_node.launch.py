@@ -21,6 +21,15 @@
     reorder_margin     排序缓冲窗口，秒。三个话题的消息按时间戳排序后处理，
                        该窗口用于等待可能迟到的早时间戳消息，代价是等长时延。
     publish_tf         是否发布 map→base 与静态坐标，默认 true。
+    publish_occupancy  是否发布 /map 占据栅格，默认 true。栅格每帧写入，
+                       按 publish_period_ms 定时整幅发布，未观测格填 -1。
+    occupancy_topic    占据栅格话题名，默认 /map。
+    publish_cloud      是否发布 /global_point_cloud，默认 true。
+    cloud_topic        点云话题名，默认 /global_point_cloud。
+    publish_pose_cov   是否发布带协方差的位姿，默认 true，每成功配准一帧一次。
+    pose_cov_topic     带协方差位姿话题名，默认 /sio_lio/pose_with_covariance。
+    publish_period_ms  占据栅格与点云的发布周期（毫秒），默认 1000；
+                       0 或负值表示不发布这两项。
     map_frame/base_frame/laser_frame/imu_frame  坐标系名称。
     use_sim_time       回放数据包并希望 TF 使用包内时间时可置 true。
 
@@ -59,6 +68,20 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("publish_static_tf", default_value="true"),
         DeclareLaunchArgument("publish_tf", default_value="true"),
+        # 三项可视化输出：开关与话题名分开，便于并排对比与避开包内同名话题
+        DeclareLaunchArgument("publish_occupancy", default_value="true"),
+        DeclareLaunchArgument("occupancy_topic", default_value="/map"),
+        DeclareLaunchArgument("publish_cloud", default_value="true"),
+        DeclareLaunchArgument("cloud_topic", default_value="/global_point_cloud"),
+        DeclareLaunchArgument("publish_pose_cov", default_value="true"),
+        DeclareLaunchArgument(
+            "pose_cov_topic", default_value="/sio_lio/pose_with_covariance"
+        ),
+        DeclareLaunchArgument(
+            "publish_period_ms",
+            default_value="1000",
+            description="占据栅格与体素点云的发布周期（毫秒）；0 或负值表示不发布",
+        ),
         DeclareLaunchArgument("map_frame", default_value="map"),
         DeclareLaunchArgument("base_frame", default_value="base"),
         DeclareLaunchArgument("laser_frame", default_value="laser"),
@@ -96,6 +119,21 @@ def generate_launch_description():
                 ),
                 "publish_tf": ParameterValue(
                     LaunchConfiguration("publish_tf"), value_type=bool
+                ),
+                "publish_occupancy": ParameterValue(
+                    LaunchConfiguration("publish_occupancy"), value_type=bool
+                ),
+                "occupancy_topic": LaunchConfiguration("occupancy_topic"),
+                "publish_cloud": ParameterValue(
+                    LaunchConfiguration("publish_cloud"), value_type=bool
+                ),
+                "cloud_topic": LaunchConfiguration("cloud_topic"),
+                "publish_pose_cov": ParameterValue(
+                    LaunchConfiguration("publish_pose_cov"), value_type=bool
+                ),
+                "pose_cov_topic": LaunchConfiguration("pose_cov_topic"),
+                "publish_period_ms": ParameterValue(
+                    LaunchConfiguration("publish_period_ms"), value_type=int
                 ),
                 "map_frame": LaunchConfiguration("map_frame"),
                 "base_frame": LaunchConfiguration("base_frame"),

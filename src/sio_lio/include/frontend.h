@@ -46,6 +46,10 @@ class Frontend {
     // 当前位姿（来自 ESKF 名义状态）
     SE2 GetPose() const;
 
+    // 当前后验误差协方差（8x8，行列顺序见 eskf.hpp 的 GetP 注释）。
+    // 用途：节点发布位姿协方差；只读，不影响滤波器状态。
+    Mat8d GetP() const { return eskf_->GetP(); }
+
     // 内部地图的只读/读写访问（对应原版 IncrementalNDTLO::getMap）。
     // 用途：外部读取体素坐标与占据栅格以发布可视化话题，或在关键帧之外补写占据栅格。
     // 注意：对返回的 Map 调用 add_keyframe / match 会改变前端状态，
