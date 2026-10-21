@@ -17,6 +17,16 @@ include_directories(${EIGEN3_INCLUDE_DIRS})
 find_package(yaml-cpp REQUIRED)
 include_directories(${YAML_CPP_INCLUDE_DIRS})
 
+# ROS 2 节点依赖。只有 node/ 下的可执行文件使用这些依赖；
+# 核心静态库 sio_lio_core 不链接任何 ROS 库，离线验证程序仍可在纯环境中构建。
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(origincar_msg REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+
 # 包内头文件以 "sio_lio/..." 前缀引用，与 ndtlio 的组织方式一致，便于逐文件对照
 include_directories(${PROJECT_SOURCE_DIR}/..)
 
@@ -46,6 +56,31 @@ if(NOT EXISTS "${PROJECT_SOURCE_DIR}/config/sio_lio.yaml")
 endif()
 install(FILES config/sio_lio.yaml
   DESTINATION share/${PROJECT_NAME}/config)
+
+# ============================================================================
+# ROS 2 节点
+#
+# 职责边界：本可执行文件只做「话题 ↔ 算法结构体」的转换与发布，
+# 不含任何算法逻辑（配准、滤波、地图、去畸变全部在 sio_lio_core 内）。
+# 部署形态：ros2 run sio_lio sio_lio_node，或 ros2 launch sio_lio sio_lio_node.launch.py
+# ============================================================================
+add_executable(sio_lio_node node/sio_lio_node.cpp)
+# 直接链接各包导出的现代 CMake 目标。不用 ament_target_dependencies：
+# 该宏在 Lyrical 中已不存在（未知命令），且它只是对 target_link_libraries 的包装。
+target_link_libraries(sio_lio_node
+  sio_lio_core
+  rclcpp::rclcpp
+  sensor_msgs::sensor_msgs
+  nav_msgs::nav_msgs
+  geometry_msgs::geometry_msgs
+  tf2_ros::tf2_ros
+  origincar_msg::origincar_msg
+  ament_index_cpp::ament_index_cpp
+)
+install(TARGETS sio_lio_node
+  DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME})
 
 # ============================================================================
 # 验证程序（test/ 目录不入库）
