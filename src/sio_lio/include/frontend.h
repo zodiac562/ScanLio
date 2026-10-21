@@ -29,6 +29,11 @@ class Frontend {
         // 去畸变总开关：false 时跳过 UndistortScan，点云保持原样。
         // 供对照实验显式关闭，不依赖「pts_time_ 未填」这种隐式失效路径。
         bool enable_undistort_ = true;
+
+        // 内部持有的两个子系统参数。此前 Frontend 用默认值构造它们，
+        // 导致 ESKF 与 NDT 的参数无法从外部配置；此处透传以支持 yaml 统一配置。
+        ESKF::Options eskf_opts_;
+        Map::Options map_opts_;
     };
 
     explicit Frontend(const Options& options);

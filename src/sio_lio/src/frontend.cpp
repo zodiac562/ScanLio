@@ -5,8 +5,9 @@
 namespace sad{
 
 Frontend::Frontend(const Options& options) : options_(options) {
-    eskf_ = std::make_shared<ESKF>();
-    map_  = std::make_shared<Map>(Map::Options());
+    // 用 options 中的嵌套参数构造子系统（此前用默认值，外部无法配置）
+    eskf_ = std::make_shared<ESKF>(options_.eskf_opts_);
+    map_  = std::make_shared<Map>(options_.map_opts_);
 }
 
 // IMU 入口：交给 ESKF 预测，并把预测位姿存入缓冲（去畸变用）

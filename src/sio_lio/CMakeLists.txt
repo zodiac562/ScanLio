@@ -13,6 +13,10 @@ find_package(ament_cmake REQUIRED)
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIRS})
 
+# yaml-cpp：统一配置文件的读取（来源 libyaml-cpp-dev，或 ROS 的 yaml-cpp-vendor）
+find_package(yaml-cpp REQUIRED)
+include_directories(${YAML_CPP_INCLUDE_DIRS})
+
 # 包内头文件以 "sio_lio/..." 前缀引用，与 ndtlio 的组织方式一致，便于逐文件对照
 include_directories(${PROJECT_SOURCE_DIR}/..)
 
@@ -20,8 +24,10 @@ include_directories(${PROJECT_SOURCE_DIR}/..)
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # 阶段2/3/4：2D NDT 配准与 ESKF 滤波核心 + 地图管理 + 前端调度（静态库，后续前端模块复用）
-add_library(sio_lio_core STATIC src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/frontend.cpp)
+add_library(sio_lio_core STATIC
+  src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/frontend.cpp src/config.cpp)
 target_include_directories(sio_lio_core PUBLIC ${PROJECT_SOURCE_DIR}/..)
+target_link_libraries(sio_lio_core PUBLIC yaml-cpp)
 
 # 阶段0验证程序：验证 Sophus 编译链接，数值核对第一课练习3
 add_executable(stage0_se2_check ${PROJECT_SOURCE_DIR}/../../test/stage0_se2_check.cpp)
@@ -67,6 +73,23 @@ target_link_libraries(stage4_map_gen sio_lio_core)
 add_executable(stage4_lio_check
   ${PROJECT_SOURCE_DIR}/../../test/stage4_lio_check.cpp)
 target_link_libraries(stage4_lio_check sio_lio_core)
+
+# 统一配置解析器专项验证（完整加载/缺省/未知键/越界/往返/默认值一致性）
+add_executable(config_check ${PROJECT_SOURCE_DIR}/../../test/config_check.cpp)
+target_link_libraries(config_check sio_lio_core)
+
+# 去畸变 × 入图位姿四路对照（含纯 NDT 基线）
+add_executable(stage4_ab_5way ${PROJECT_SOURCE_DIR}/../../test/stage4_ab_5way.cpp)
+target_link_libraries(stage4_ab_5way sio_lio_core)
+
+# 管线轨迹导出（每帧一行 x y theta）
+add_executable(stage4_traj_dump ${PROJECT_SOURCE_DIR}/../../test/stage4_traj_dump.cpp)
+target_link_libraries(stage4_traj_dump sio_lio_core)
+
+# 去畸变生效性专项验证 + 开关对照
+add_executable(stage4_undistort_effect_check
+  ${PROJECT_SOURCE_DIR}/../../test/stage4_undistort_effect_check.cpp)
+target_link_libraries(stage4_undistort_effect_check sio_lio_core)
 
 install(TARGETS stage0_se2_check stage3_smoke_test stage3_eskf_test
         stage4_ndt_enhance_check stage4_map_check stage4_lio_check
