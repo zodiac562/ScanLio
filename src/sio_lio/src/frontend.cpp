@@ -46,7 +46,9 @@ bool Frontend::ProcessScan(const std::shared_ptr<Frame>& frame) {
     // ---- 第 2 步：去畸变 ----
     // 帧内各点采样时刻不同（0.1s 内车在动），用 IMU 预测位姿把各点
     // 补偿到统一时刻，否则配准与建图带系统误差。
-    UndistortScan(frame);
+    if (options_.enable_undistort_) {
+        UndistortScan(frame);
+    }
 
     // ---- 第 3 步：初值推算 ----
     // 从缓冲中取「时间上最接近本帧时刻」的 ESKF 预测位姿作为初值。
@@ -64,18 +66,23 @@ bool Frontend::ProcessScan(const std::shared_ptr<Frame>& frame) {
     // ---- 第 5 步：修正与关键帧判定 ----
     // 配准结果喂回 ESKF（雷达观测修正），滤波器输出位姿更新。
     eskf_->ObserveLidar(pose);
-    
-    frame->pose_ = pose;
+
+    // 入图位姿来源（Options::use_filtered_pose_for_map_）：
+    //   true  -> 滤波后位姿（对齐原版 ndtlio frontend.cpp:35）
+    //   false -> 配准位姿（NDT 输出，未与预测融合）
+    // 关键帧判定与 last_keyframe_pose_ 使用同一个位姿，保证判定基准与入库基准一致。
+    const SE2 map_pose = options_.use_filtered_pose_for_map_ ? eskf_->GetNominalPose() : pose;
+    frame->pose_ = map_pose;
 
     // 关键帧判定：与上一关键帧比平移与转角，达标才入库
-    SE2 delta = last_keyframe_pose_.inverse() * pose;
+    SE2 delta = last_keyframe_pose_.inverse() * map_pose;
     bool is_keyframe =
         delta.translation().norm() > options_.keyframe_dist_th_ ||
         std::fabs(delta.so2().log()) > options_.keyframe_rot_th_;
 
     if (is_keyframe) {
         map_->add_keyframe(frame);
-        last_keyframe_pose_ = pose;
+        last_keyframe_pose_ = map_pose;
     }
 
     return true;

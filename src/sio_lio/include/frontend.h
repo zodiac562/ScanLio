@@ -18,6 +18,17 @@ class Frontend {
         double keyframe_dist_th_ = 0.1;     // 关键帧平移阈值（米）
         double keyframe_rot_th_ = 15.0 * M_PI / 180.0;  // 关键帧旋转阈值（弧度）
         size_t imu_buffer_size_ = 20;       // IMU 位姿缓冲容量（对齐原版）
+
+        // 入图位姿来源：
+        //   true  —— 用滤波后位姿（ESKF 修正完的名义状态），对齐原版 ndtlio
+        //            frontend.cpp:35「current_frame_->pose_ = eskf_->getNominalPose()」
+        //   false —— 用配准位姿（NDT 输出，未与预测融合）
+        // 两者差别 = (I - K) × 配准残差：K 越接近 1（越信任雷达）差别越小。
+        bool use_filtered_pose_for_map_ = true;
+
+        // 去畸变总开关：false 时跳过 UndistortScan，点云保持原样。
+        // 供对照实验显式关闭，不依赖「pts_time_ 未填」这种隐式失效路径。
+        bool enable_undistort_ = true;
     };
 
     explicit Frontend(const Options& options);
