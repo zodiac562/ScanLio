@@ -29,71 +29,82 @@ add_library(sio_lio_core STATIC
 target_include_directories(sio_lio_core PUBLIC ${PROJECT_SOURCE_DIR}/..)
 target_link_libraries(sio_lio_core PUBLIC yaml-cpp)
 
-# 阶段0验证程序：验证 Sophus 编译链接，数值核对第一课练习3
-add_executable(stage0_se2_check ${PROJECT_SOURCE_DIR}/../../test/stage0_se2_check.cpp)
-target_link_libraries(stage0_se2_check sio_lio_core)
+# ============================================================================
+# 配置文件安装
+#
+# 作用：让 sio_lio.yaml 在「安装后的目录」中也存在一份，而不是只存在于源码树。
+# 安装后的位置为 install/sio_lio/share/sio_lio/config/sio_lio.yaml，
+# 该位置是 ROS 2 软件包共享目录的标准结构。将来把算法包装成 ROS 2 节点时，
+# 节点可以用 ament_index_cpp::get_package_share_directory("sio_lio") 得到
+# share/sio_lio 的绝对路径，再拼上 config/sio_lio.yaml，即可在任意工作目录启动。
+#
+# 配置期检查文件存在：若文件被改名或删除，cmake 配置阶段直接报错，
+# 而不是等安装完成后才发现 share 目录里没有配置文件。
+# ============================================================================
+if(NOT EXISTS "${PROJECT_SOURCE_DIR}/config/sio_lio.yaml")
+  message(FATAL_ERROR "sio_lio: 缺少 ${PROJECT_SOURCE_DIR}/config/sio_lio.yaml，无法安装配置文件")
+endif()
+install(FILES config/sio_lio.yaml
+  DESTINATION share/${PROJECT_NAME}/config)
 
-# 阶段1/2 验证程序（此前遗漏登记，2026-10-17 补全）
-add_executable(stage1_static_init_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage1_static_init_check.cpp)
-target_link_libraries(stage1_static_init_check sio_lio_core)
+# ============================================================================
+# 验证程序（test/ 目录不入库）
+#
+# test/ 被 .gitignore 排除，因此他人 clone 后该目录不存在。若直接
+# add_executable 指向不存在的源文件，CMake 会在配置阶段报错，导致整个包
+# 无法构建。这里改为「逐个检测源文件是否存在，缺失则跳过并给出提示」：
+#   - 本地开发：test/ 存在 → 全部验证程序正常构建
+#   - 他人 clone：test/ 缺失 → 只构建 sio_lio_core，不报错
+# 也可用 -DSIO_LIO_WITH_TESTS=OFF 强制跳过。
+# ============================================================================
+option(SIO_LIO_WITH_TESTS "构建 test/ 下的验证程序（源文件存在时才构建）" ON)
+set(SIO_LIO_TEST_DIR ${PROJECT_SOURCE_DIR}/../../test)
+set(SIO_LIO_TEST_TARGETS "")
 
-add_executable(stage2_motion_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage2_motion_check.cpp)
-target_link_libraries(stage2_motion_check sio_lio_core)
+# 登记一个验证程序：源文件存在才 add_executable，否则打印提示并跳过
+function(sio_lio_add_test name)
+  if(NOT EXISTS "${SIO_LIO_TEST_DIR}/${name}.cpp")
+    message(STATUS "sio_lio: 跳过验证程序 ${name}（缺 ${SIO_LIO_TEST_DIR}/${name}.cpp）")
+    return()
+  endif()
+  add_executable(${name} "${SIO_LIO_TEST_DIR}/${name}.cpp")
+  target_link_libraries(${name} sio_lio_core)
+  set(SIO_LIO_TEST_TARGETS ${SIO_LIO_TEST_TARGETS} ${name} PARENT_SCOPE)
+endfunction()
 
-add_executable(stage2_scan_match_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage2_scan_match_check.cpp)
-target_link_libraries(stage2_scan_match_check sio_lio_core)
+if(SIO_LIO_WITH_TESTS)
+  message(STATUS "sio_lio: 验证程序目录 ${SIO_LIO_TEST_DIR}")
+  # 阶段0：验证 Sophus 编译链接
+  sio_lio_add_test(stage0_se2_check)
+  # 阶段1：静态初始化（零偏与噪声标定）
+  sio_lio_add_test(stage1_static_init_check)
+  # 阶段2：运动数据上的 NDT 配准
+  sio_lio_add_test(stage2_motion_check)
+  sio_lio_add_test(stage2_scan_match_check)
+  # 阶段3：ESKF 冒烟与统计测试
+  sio_lio_add_test(stage3_smoke_test)
+  sio_lio_add_test(stage3_eskf_test)
+  # 阶段4：NDT 增强、地图管理、管线验收、可视化
+  sio_lio_add_test(stage4_ndt_enhance_check)
+  sio_lio_add_test(stage4_map_check)
+  sio_lio_add_test(stage4_map_gen)
+  sio_lio_add_test(stage4_lio_check)
+  sio_lio_add_test(stage4_ab_5way)
+  sio_lio_add_test(stage4_traj_dump)
+  sio_lio_add_test(stage4_undistort_effect_check)
+  # 统一配置解析器
+  sio_lio_add_test(config_check)
+else()
+  message(STATUS "sio_lio: SIO_LIO_WITH_TESTS=OFF，跳过全部验证程序")
+endif()
 
-# 阶段3冒烟测试：手工构造数据走通 ESKF 五接口（不依赖数据集）
-add_executable(stage3_smoke_test ${PROJECT_SOURCE_DIR}/../../test/stage3_smoke_test.cpp)
-target_link_libraries(stage3_smoke_test sio_lio_core)
-
-# 阶段3统计与实测测试：蒙特卡洛无偏性/噪声标度律/真实静止数据（读 test/data）
-add_executable(stage3_eskf_test ${PROJECT_SOURCE_DIR}/../../test/stage3_eskf_test.cpp)
-target_link_libraries(stage3_eskf_test sio_lio_core)
-
-# 阶段4：NDT 三项增强的针对性验证（LRU 一致性/卡方剔除前后对比/SVD 求逆稳健性）
-add_executable(stage4_ndt_enhance_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage4_ndt_enhance_check.cpp)
-target_link_libraries(stage4_ndt_enhance_check sio_lio_core)
-
-# 阶段4：Map 地图管理专项验证（入库/地图生长/配准/空地图边界）
-add_executable(stage4_map_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage4_map_check.cpp)
-target_link_libraries(stage4_map_check sio_lio_core)
-
-# 阶段4 任务F：可视化地图数据生成（Frontend 管线 + 射线追踪占据栅格）
-add_executable(stage4_map_gen
-  ${PROJECT_SOURCE_DIR}/../../test/stage4_map_gen.cpp)
-target_link_libraries(stage4_map_gen sio_lio_core)
-
-# 阶段4 验收：完整 LIO 管线（Frontend）在真实数据上的多数据集验证
-add_executable(stage4_lio_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage4_lio_check.cpp)
-target_link_libraries(stage4_lio_check sio_lio_core)
-
-# 统一配置解析器专项验证（完整加载/缺省/未知键/越界/往返/默认值一致性）
-add_executable(config_check ${PROJECT_SOURCE_DIR}/../../test/config_check.cpp)
-target_link_libraries(config_check sio_lio_core)
-
-# 去畸变 × 入图位姿四路对照（含纯 NDT 基线）
-add_executable(stage4_ab_5way ${PROJECT_SOURCE_DIR}/../../test/stage4_ab_5way.cpp)
-target_link_libraries(stage4_ab_5way sio_lio_core)
-
-# 管线轨迹导出（每帧一行 x y theta）
-add_executable(stage4_traj_dump ${PROJECT_SOURCE_DIR}/../../test/stage4_traj_dump.cpp)
-target_link_libraries(stage4_traj_dump sio_lio_core)
-
-# 去畸变生效性专项验证 + 开关对照
-add_executable(stage4_undistort_effect_check
-  ${PROJECT_SOURCE_DIR}/../../test/stage4_undistort_effect_check.cpp)
-target_link_libraries(stage4_undistort_effect_check sio_lio_core)
-
-install(TARGETS stage0_se2_check stage3_smoke_test stage3_eskf_test
-        stage4_ndt_enhance_check stage4_map_check stage4_lio_check
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
-)
+if(SIO_LIO_TEST_TARGETS)
+  list(LENGTH SIO_LIO_TEST_TARGETS _n)
+  message(STATUS "sio_lio: 已登记 ${_n} 个验证程序")
+  install(TARGETS ${SIO_LIO_TEST_TARGETS}
+    RUNTIME DESTINATION lib/${PROJECT_NAME})
+else()
+  message(STATUS "sio_lio: 未登记任何验证程序，仅构建 sio_lio_core")
+endif()
 
 ament_package()
