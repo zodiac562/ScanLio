@@ -16,6 +16,9 @@
   <depend>geometry_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>origincar_msg</depend>
+  <!-- yaml-cpp：CMakeLists 中 find_package(yaml-cpp REQUIRED)，
+       不声明时 rosdep 不会安装，板载重新 colcon build 会在 cmake 配置阶段失败 -->
+  <depend>yaml-cpp</depend>
 
   <export>
     <build_type>ament_cmake</build_type>
