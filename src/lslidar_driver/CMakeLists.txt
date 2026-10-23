@@ -42,8 +42,11 @@ target_link_libraries(lslidar_driver_node ${rclcpp_LIBRARIES} ${libpcap_LIBRARIE
 ament_target_dependencies(lslidar_driver_node rclcpp std_msgs lslidar_msgs sensor_msgs diagnostic_updater pcl_conversions)
 
 
-install(DIRECTORY launch params rviz
-	DESTINATION share/${PROJECT_NAME}、
+install(DIRECTORY params
+  DESTINATION share/${PROJECT_NAME}
+)
+install(DIRECTORY rviz
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(DIRECTORY launch

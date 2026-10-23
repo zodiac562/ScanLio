@@ -65,18 +65,38 @@ install(FILES config/sio_lio.yaml
 # 部署形态：ros2 run sio_lio sio_lio_node，或 ros2 launch sio_lio sio_lio_node.launch.py
 # ============================================================================
 add_executable(sio_lio_node node/sio_lio_node.cpp)
-# 直接链接各包导出的现代 CMake 目标。不用 ament_target_dependencies：
-# 该宏在 Lyrical 中已不存在（未知命令），且它只是对 target_link_libraries 的包装。
-target_link_libraries(sio_lio_node
-  sio_lio_core
-  rclcpp::rclcpp
-  sensor_msgs::sensor_msgs
-  nav_msgs::nav_msgs
-  geometry_msgs::geometry_msgs
-  tf2_ros::tf2_ros
-  origincar_msg::origincar_msg
-  ament_index_cpp::ament_index_cpp
-)
+
+# ----------------------------------------------------------------------------
+# 依赖链接：两个发行版导出的目标不同，必须分情况处理。
+#
+#   较新发行版（主机 Lyrical）：每个包都导出聚合导入目标 <包>::<包>，
+#     message 包（sensor_msgs、origincar_msg 等）也导出，target_link_libraries 直接可用。
+#
+#   Humble（板载 /opt/tros/humble）：message 包由本机 rosidl 生成，其 cmake 配置
+#     只导出 <包>::<包>__rosidl_generator_c、<包>::<包>__rosidl_typesupport_cpp
+#     一类目标，不导出聚合目标 <包>::<包>。此时引用聚合目标会在 Generate 阶段报
+#     「Target links to target "X::X" but the target was not found」。
+#     该发行版仍提供 ament_target_dependencies 宏，由它按变量拼接 include 与库。
+#
+# 两级判定：先看聚合目标是否已由 find_package 导出，再退回 ament_target_dependencies。
+# 该宏在较新发行版中不存在，所以不能无条件调用。
+# ----------------------------------------------------------------------------
+function(sio_lio_link_dep target_name pkg)
+  if(TARGET ${pkg}::${pkg})
+    target_link_libraries(${target_name} ${pkg}::${pkg})
+  elseif(COMMAND ament_target_dependencies)
+    ament_target_dependencies(${target_name} ${pkg})
+  else()
+    message(FATAL_ERROR
+      "sio_lio: ${pkg} 既未导出聚合目标 ${pkg}::${pkg}，也不存在 ament_target_dependencies 宏，无法链接")
+  endif()
+endfunction()
+
+target_link_libraries(sio_lio_node sio_lio_core)
+foreach(_sio_dep
+    rclcpp sensor_msgs nav_msgs geometry_msgs tf2_ros origincar_msg ament_index_cpp)
+  sio_lio_link_dep(sio_lio_node ${_sio_dep})
+endforeach()
 install(TARGETS sio_lio_node
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch

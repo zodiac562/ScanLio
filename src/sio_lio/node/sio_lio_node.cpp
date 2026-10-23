@@ -49,8 +49,18 @@
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
+// tf2_ros 的头文件扩展名随发行版变化：Humble 为 .h，较新发行版（Lyrical）改为 .hpp。
+// 用 __has_include 判定，两版各自取到存在的那个，类名与接口在两版一致。
+#if __has_include(<tf2_ros/static_transform_broadcaster.hpp>)
 #include <tf2_ros/static_transform_broadcaster.hpp>
+#else
+#include <tf2_ros/static_transform_broadcaster.h>
+#endif
+#if __has_include(<tf2_ros/transform_broadcaster.hpp>)
 #include <tf2_ros/transform_broadcaster.hpp>
+#else
+#include <tf2_ros/transform_broadcaster.h>
+#endif
 
 #include <chrono>
 #include <cmath>
