@@ -30,8 +30,10 @@ init:
 eskf:
   gyro_var: 1.0e-6          # [默认] 陀螺角速度过程噪声方差，(rad/s)^2 / 步
   acce_var: 1.0e-3          # [默认] 加计比力过程噪声方差，(m/s^2)^2 / 步
-  bias_gyro_var: 1.0e-4     # [默认] 陀螺零偏随机游走方差，每步
-  bias_acce_var: 1.0e-4     # [默认] 加计零偏随机游走方差，每步
+  bias_gyro_var: 1.430343e-05  # [实测] 陀螺零偏随机游走方差，每步
+                               #        来源 doc/eskf_noise_params.yaml：bias_gyro_rw_std 3.783749e-02 → 每步 1.430343e-05
+  bias_acce_var: 9.253627e-05  # [实测] 加计零偏随机游走方差，每步
+                               #        来源同上：bias_acce_rw_std 9.624057e-02 → 每步 9.253627e-05
   odom_var: 0.1             # [默认] 轮速观测噪声方差，(m/s)^2；偏大=不信任轮速
   lidar_pos_noise: 0.05     # [默认] 雷达位姿观测位置标准差，m；x/y 共用
   lidar_ang_noise: 0.1      # [默认] 雷达位姿观测角度标准差，rad

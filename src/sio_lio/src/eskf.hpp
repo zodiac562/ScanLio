@@ -12,8 +12,12 @@ namespace sad{
         struct Options{
             double gyro_var_ = 1e-6;         // 陀螺噪声方差
             double acce_var_ = 1e-3;         // 加计噪声方差
-            double bias_gyro_var_ = 1e-4;    // 陀螺零偏随机游走方差
-            double bias_acce_var_ = 1e-4;    // 加计零偏随机游走方差
+            // 零偏随机游走方差：取实测值（doc/eskf_noise_params.yaml）。
+            // bias_gyro_rw_std 3.783749e-02 → 每步 1.430343e-05；
+            // bias_acce_rw_std 9.624057e-02 → 每步 9.253627e-05。
+            // 原值 1e-4 无实测依据，会使零偏跟随过慢。
+            double bias_gyro_var_ = 1.430343e-05;  // 陀螺零偏随机游走方差
+            double bias_acce_var_ = 9.253627e-05;  // 加计零偏随机游走方差
             double odom_var_ = 0.1;          // 轮速观测噪声
             double lidar_pos_noise_ = 0.05;  // 雷达位姿观测位置噪声
             double lidar_ang_noise_ = 0.1;   // 雷达位姿观测角度噪声
@@ -35,6 +39,10 @@ namespace sad{
         // 用途：发布位姿协方差、观察各状态的可观测性变化。返回值是副本，
         // 修改它不会影响滤波器内部状态。
         Mat8d GetP() const;
+
+        // 当前名义零偏（陀螺 z 轴、加计 xy）。只读，用于验证零偏估计是否收敛：
+        // 给一个与真值不同的初值，观察返回值是否朝真值靠近。
+        void GetBias(double* bg, Vec2d* ba) const;
 
     private:
         Vec2d p_ = Vec2d::Zero();

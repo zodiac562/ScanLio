@@ -139,6 +139,8 @@ if(SIO_LIO_WITH_TESTS)
   # 阶段3：ESKF 冒烟与统计测试
   sio_lio_add_test(stage3_smoke_test)
   sio_lio_add_test(stage3_eskf_test)
+  # 零偏作为滤波器状态的在线收敛（给错误初值，看是否朝真值靠近）
+  sio_lio_add_test(stage3_bias_convergence_test)
   # 阶段4：NDT 增强、地图管理、管线验收、可视化
   sio_lio_add_test(stage4_ndt_enhance_check)
   sio_lio_add_test(stage4_map_check)

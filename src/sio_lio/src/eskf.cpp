@@ -106,14 +106,17 @@ void ESKF::ObserveOdom(const Odom& odom) {
     // 卡尔曼增益 K（8x1）：K = P H^T / S
     Eigen::Matrix<double, 8, 1> K = P_ * H.transpose() / S;
 
-    // 误差状态估计并注入名义状态
-    // （零偏分量 dx(5)、dx(6)、dx(7) 按 Zodiac 决策留待阶段 4 数据流程化接入，此处丢弃）
+    // 误差状态估计并注入名义状态（8 维全量，含零偏分量 dx(5..7)）
+    // 零偏必须注入：下面 P = (I-KH)P 会连同零偏块一起缩减，若名义零偏不改，
+    // 协方差账本与状态不一致，残差只能经 K 的位姿行被吸收。
     Vec8d dx = K * r;
     p_ += dx.head<2>();
     v_ += dx.segment<2>(2);
     theta_ += dx(4);
     while (theta_ > M_PI) theta_ -= 2 * M_PI;
     while (theta_ < -M_PI) theta_ += 2 * M_PI;
+    bg_ += dx(5);
+    ba_ += dx.segment<2>(6);
 
     // 协方差更新：P = (I - K H) P
     Mat8d I_KH = Mat8d::Identity() - K * H;
@@ -167,6 +170,8 @@ void ESKF::ObserveLidar(const SE2& lidar_pose) {
     theta_ += dx[4];
     while (theta_ > M_PI) theta_ -= 2 * M_PI;
     while (theta_ < -M_PI) theta_ += 2 * M_PI;
+    bg_ += dx[5];
+    ba_ += dx.segment<2>(6);
 
     // 协方差更新：P = (I - K H) P
     Mat8d I_KH = Mat8d::Identity() - K_full * H;
@@ -179,6 +184,11 @@ SE2 ESKF::GetNominalPose() const {
 
 Mat8d ESKF::GetP() const {
     return P_;
+}
+
+void ESKF::GetBias(double* bg, Vec2d* ba) const {
+    if (bg != nullptr) *bg = bg_;
+    if (ba != nullptr) *ba = ba_;
 }
 
 }  // namespace sad
