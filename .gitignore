@@ -6,3 +6,7 @@
 /doc
 /.vscode
 /src/car_base_v2/docs
+
+# GPL-3.0 第三方包，不随本仓库分发；需从厂商渠道获取
+/src/lslidar_driver
+/src/lslidar_msgs
