@@ -1,7 +1,7 @@
 #ifndef CONFIG_H_
 #define CONFIG_H_
 
-// sio_lio 统一配置：把分散在 ESKF::Options / NDT2D::Options / Map::Options /
+// scanlio 统一配置：把分散在 ESKF::Options / NDT2D::Options / Map::Options /
 // Frontend::Options 四处的参数，以及阶段 1 静态标定的初始条件，收拢为一个
 // 可从 yaml 文件加载的结构。
 //
@@ -10,9 +10,9 @@
 //   2. yaml 中出现未知键 → 加载失败并报出键名（防止拼写错误静默失效）
 //   3. 加载失败时调用方必须检查返回值，本模块不会静默回退到默认值
 
-#include "sio_lio/include/frontend.h"
-#include "sio_lio/src/eskf.hpp"
-#include "sio_lio/src/ndt_2d.hpp"
+#include "scanlio/include/frontend.h"
+#include "scanlio/src/eskf.hpp"
+#include "scanlio/src/ndt_2d.hpp"
 
 #include <string>
 

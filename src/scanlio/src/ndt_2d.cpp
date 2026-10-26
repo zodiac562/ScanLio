@@ -1,5 +1,5 @@
-#include "sio_lio/src/ndt_2d.hpp"
-#include "sio_lio/common/math_utils.h"
+#include "scanlio/src/ndt_2d.hpp"
+#include "scanlio/common/math_utils.h"
 #include <set>
 #include <limits>
 

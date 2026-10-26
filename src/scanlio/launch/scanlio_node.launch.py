@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""sio_lio 节点的启动文件。
+"""scanlio 节点的启动文件。
 
 启动方式：
-    ros2 launch sio_lio sio_lio_node.launch.py
-    ros2 launch sio_lio sio_lio_node.launch.py config_file:=/abs/path/sio_lio.yaml
+    ros2 launch scanlio scanlio_node.launch.py
+    ros2 launch scanlio scanlio_node.launch.py config_file:=/abs/path/scanlio.yaml
     # 回放数据包时避免与包内录制的轨迹冲突：
-    ros2 launch sio_lio sio_lio_node.launch.py trajectory_topic:=/sio_lio/trajectory
+    ros2 launch scanlio scanlio_node.launch.py trajectory_topic:=/scanlio/trajectory
 
 参数说明：
     config_file        配置文件绝对路径。留空时节点使用安装目录下的
-                       share/sio_lio/config/sio_lio.yaml。
+                       share/scanlio/config/scanlio.yaml。
     scan_topic         LaserScan 话题，默认 /scan。
     imu_topic          Imu 话题，默认 /imu。
     odom_topic         轮速话题（origincar_msg/Data），默认 /robotvel。
@@ -27,7 +27,7 @@
     publish_cloud      是否发布 /global_point_cloud，默认 true。
     cloud_topic        点云话题名，默认 /global_point_cloud。
     publish_pose_cov   是否发布带协方差的位姿，默认 true，每成功配准一帧一次。
-    pose_cov_topic     带协方差位姿话题名，默认 /sio_lio/pose_with_covariance。
+    pose_cov_topic     带协方差位姿话题名，默认 /scanlio/pose_with_covariance。
     publish_period_ms  占据栅格与点云的发布周期（毫秒），默认 1000；
                        0 或负值表示不发布这两项。
     map_frame/base_frame/laser_frame/imu_frame  坐标系名称。
@@ -48,7 +48,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "config_file",
             default_value="",
-            description="配置文件绝对路径；留空则用 share/sio_lio/config/sio_lio.yaml",
+            description="配置文件绝对路径；留空则用 share/scanlio/config/scanlio.yaml",
         ),
         DeclareLaunchArgument("scan_topic", default_value="/scan"),
         DeclareLaunchArgument("imu_topic", default_value="/imu"),
@@ -75,7 +75,7 @@ def generate_launch_description():
         DeclareLaunchArgument("cloud_topic", default_value="/global_point_cloud"),
         DeclareLaunchArgument("publish_pose_cov", default_value="true"),
         DeclareLaunchArgument(
-            "pose_cov_topic", default_value="/sio_lio/pose_with_covariance"
+            "pose_cov_topic", default_value="/scanlio/pose_with_covariance"
         ),
         DeclareLaunchArgument(
             "publish_period_ms",
@@ -94,9 +94,9 @@ def generate_launch_description():
     ]
 
     node = Node(
-        package="sio_lio",
-        executable="sio_lio_node",
-        name="sio_lio_node",
+        package="scanlio",
+        executable="scanlio_node",
+        name="scanlio_node",
         output="screen",
         parameters=[
             {

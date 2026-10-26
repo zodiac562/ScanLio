@@ -4,10 +4,10 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
-#include "sio_lio/common/eigen_types.h"
-#include "sio_lio/common/imu.h"
-#include "sio_lio/common/odom.h"
-#include "sio_lio/common/math_utils.h"
+#include "scanlio/common/eigen_types.h"
+#include "scanlio/common/imu.h"
+#include "scanlio/common/odom.h"
+#include "scanlio/common/math_utils.h"
 
 namespace sad {
 

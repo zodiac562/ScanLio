@@ -1,7 +1,7 @@
 #ifndef OCCUPANCY_MAP_H_
 #define OCCUPANCY_MAP_H_
 
-#include "sio_lio/common/eigen_types.h"
+#include "scanlio/common/eigen_types.h"
 
 #include <map>
 #include <utility>

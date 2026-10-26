@@ -1,7 +1,7 @@
 #ifndef IMU_H
 #define IMU_H
 
-#include "sio_lio/common/eigen_types.h"
+#include "scanlio/common/eigen_types.h"
 
 namespace sad {
     struct Imu{

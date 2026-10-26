@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""sio_lio 实机整合启动文件：雷达驱动 + 底盘驱动 + 算法节点。
+"""scanlio 实机整合启动文件：雷达驱动 + 底盘驱动 + 算法节点。
 
 启动方式：
-    ros2 launch sio_lio sio_lio_bringup.launch.py
+    ros2 launch scanlio scanlio_bringup.launch.py
     # 串口设备名颠倒时（先插底盘后插雷达）：
-    ros2 launch sio_lio sio_lio_bringup.launch.py lidar_port:=/dev/ttyACM1 base_port:=/dev/ttyACM0
+    ros2 launch scanlio scanlio_bringup.launch.py lidar_port:=/dev/ttyACM1 base_port:=/dev/ttyACM0
     # 不用 yaml 标定值、改做在线静止初始化：
-    ros2 launch sio_lio sio_lio_bringup.launch.py use_static_init:=true
+    ros2 launch scanlio scanlio_bringup.launch.py use_static_init:=true
 
 本文件只做装配，不含算法逻辑，也不改变各包的内部默认值。装配处统一指定三类量：
     1. 坐标系名称：base_frame / imu_frame / laser_frame，使算法节点发布的 TF 与
@@ -40,7 +40,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 LIDAR_NODE_NAME = "lslidar_driver_node"
 BASE_NODE_NAME = "car_base_v2_node"
-SIO_NODE_NAME = "sio_lio_node"
+SCANLIO_NODE_NAME = "scanlio_node"
 
 
 def generate_launch_description():
@@ -52,10 +52,10 @@ def generate_launch_description():
         "lsn10.yaml",
     )
 
-    # ---- 算法配置文件：随 sio_lio 包安装到 share/sio_lio/config/ ----
+    # ---- 算法配置文件：随 scanlio 包安装到 share/scanlio/config/ ----
     # 留空则节点自行用 ament_index_cpp 定位，这里显式给出便于排查实际加载的文件
     sio_config_file = os.path.join(
-        get_package_share_directory("sio_lio"), "config", "sio_lio.yaml"
+        get_package_share_directory("scanlio"), "config", "scanlio.yaml"
     )
 
     args = [
@@ -101,7 +101,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "use_static_init",
             default_value="false",
-            description="true=启动时做在线静止初始化；false=用 sio_lio.yaml 的标定零偏",
+            description="true=启动时做在线静止初始化；false=用 scanlio.yaml 的标定零偏",
         ),
         DeclareLaunchArgument("static_init_seconds", default_value="10.0"),
         DeclareLaunchArgument("publish_tf", default_value="true"),
@@ -111,7 +111,7 @@ def generate_launch_description():
         DeclareLaunchArgument("publish_cloud", default_value="true"),
         DeclareLaunchArgument("cloud_topic", default_value="/global_point_cloud"),
         DeclareLaunchArgument("publish_pose_cov", default_value="true"),
-        DeclareLaunchArgument("pose_cov_topic", default_value="/sio_lio/pose_with_covariance"),
+        DeclareLaunchArgument("pose_cov_topic", default_value="/scanlio/pose_with_covariance"),
         DeclareLaunchArgument("publish_period_ms", default_value="1000"),
         DeclareLaunchArgument("reorder_margin", default_value="0.02"),
     ]
@@ -167,9 +167,9 @@ def generate_launch_description():
 
     # ---- 3. 算法节点 ----
     sio_node = Node(
-        package="sio_lio",
-        executable="sio_lio_node",
-        name=SIO_NODE_NAME,
+        package="scanlio",
+        executable="scanlio_node",
+        name=SCANLIO_NODE_NAME,
         output="screen",
         parameters=[
             {

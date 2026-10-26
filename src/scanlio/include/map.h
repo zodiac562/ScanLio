@@ -1,10 +1,10 @@
 #ifndef MAP_H_
 #define MAP_H_
 
-#include "sio_lio/common/eigen_types.h"
+#include "scanlio/common/eigen_types.h"
 #include "frame.h"
-#include "sio_lio/include/occupancy_map.h"
-#include "sio_lio/src/ndt_2d.hpp"
+#include "scanlio/include/occupancy_map.h"
+#include "scanlio/src/ndt_2d.hpp"
 
 #include <map>
 #include <memory>

@@ -1,10 +1,10 @@
 #ifndef FRONTEND_H_
 #define FRONTEND_H_
 
-#include "sio_lio/include/map.h"
-#include "sio_lio/src/eskf.hpp"
-#include "sio_lio/common/imu.h"
-#include "sio_lio/common/odom.h"
+#include "scanlio/include/map.h"
+#include "scanlio/src/eskf.hpp"
+#include "scanlio/common/imu.h"
+#include "scanlio/common/odom.h"
 
 #include <deque>
 #include <memory>

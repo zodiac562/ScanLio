@@ -1,4 +1,4 @@
-// sio_lio 的 ROS 2 节点：把 Frontend（ESKF + NDT + Map）接到 ROS 话题上。
+// scanlio 的 ROS 2 节点：把 Frontend（ESKF + NDT + Map）接到 ROS 话题上。
 //
 // 数据流（与原版 ndtlio ros2node/ndt_lio_node.cpp 一致）：
 //   /imu      sensor_msgs/Imu       → Frontend::ProcessImu  → ESKF 预测
@@ -10,7 +10,7 @@
 //   /tf_static           base → laser / imu   定时重发（2 s），与驱动侧坐标系保持同一假设
 //   /map                 nav_msgs/OccupancyGrid    定时发布（publish_period_ms，默认 1 s）
 //   /global_point_cloud  sensor_msgs/PointCloud2   定时发布，内容为已生效体素的中心
-//   /sio_lio/pose_with_covariance                 每成功配准一帧发布一次，携带 ESKF 后验协方差
+//   /scanlio/pose_with_covariance                 每成功配准一帧发布一次，携带 ESKF 后验协方差
 //
 // 三项可视化输出的数据来源都是核心库的只读接口，节点不自行计算：
 //   占据栅格 → Map::occupancy_map() 的 bounds/probability
@@ -31,12 +31,12 @@
 // 状态只被一个线程访问，不需要加锁。栅格与点云的定时发布也在同一线程内，
 // 与配准串行执行，因此不需要对 Map 加锁。
 
-#include "sio_lio/common/imu.h"
-#include "sio_lio/common/odom.h"
-#include "sio_lio/common/static_imu_init.h"
-#include "sio_lio/include/config.h"
-#include "sio_lio/include/frame.h"
-#include "sio_lio/include/frontend.h"
+#include "scanlio/common/imu.h"
+#include "scanlio/common/odom.h"
+#include "scanlio/common/static_imu_init.h"
+#include "scanlio/include/config.h"
+#include "scanlio/include/frame.h"
+#include "scanlio/include/frontend.h"
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
@@ -107,11 +107,11 @@ geometry_msgs::msg::TransformStamped MakeTransform(const std::string& parent,
 
 }  // namespace
 
-class SioLioNode : public rclcpp::Node {
+class ScanLioNode : public rclcpp::Node {
    public:
-    SioLioNode() : rclcpp::Node("sio_lio_node") {
+    ScanLioNode() : rclcpp::Node("scanlio_node") {
         // ---- 1. 参数声明 ----
-        // 空字符串表示「用安装目录下的 share/sio_lio/config/sio_lio.yaml」
+        // 空字符串表示「用安装目录下的 share/scanlio/config/scanlio.yaml」
         config_file_ = this->declare_parameter<std::string>("config_file", "");
         const std::string scan_topic = this->declare_parameter<std::string>("scan_topic", "/scan");
         const std::string imu_topic = this->declare_parameter<std::string>("imu_topic", "/imu");
@@ -130,7 +130,7 @@ class SioLioNode : public rclcpp::Node {
             this->declare_parameter<std::string>("cloud_topic", "/global_point_cloud");
         publish_pose_cov_ = this->declare_parameter<bool>("publish_pose_cov", true);
         const std::string pose_cov_topic = this->declare_parameter<std::string>(
-            "pose_cov_topic", "/sio_lio/pose_with_covariance");
+            "pose_cov_topic", "/scanlio/pose_with_covariance");
         const int publish_period_ms = this->declare_parameter<int>("publish_period_ms", 1000);
 
         map_frame_ = this->declare_parameter<std::string>("map_frame", "map");
@@ -149,7 +149,7 @@ class SioLioNode : public rclcpp::Node {
         std::string err;
         if (!cfg_.LoadFromYaml(path, &err)) {
             RCLCPP_FATAL(this->get_logger(), "配置加载失败：%s\n原因：%s", path.c_str(), err.c_str());
-            throw std::runtime_error("sio_lio 配置加载失败");
+            throw std::runtime_error("scanlio 配置加载失败");
         }
         RCLCPP_INFO(this->get_logger(), "配置来源：%s", path.c_str());
 
@@ -199,19 +199,19 @@ class SioLioNode : public rclcpp::Node {
 
         imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
             imu_topic, rclcpp::QoS(100),
-            std::bind(&SioLioNode::ImuCallback, this, std::placeholders::_1));
+            std::bind(&ScanLioNode::ImuCallback, this, std::placeholders::_1));
         odom_sub_ = this->create_subscription<origincar_msg::msg::Data>(
             odom_topic, rclcpp::QoS(100),
-            std::bind(&SioLioNode::OdomCallback, this, std::placeholders::_1));
+            std::bind(&ScanLioNode::OdomCallback, this, std::placeholders::_1));
         // 雷达队列深度 1：一帧 0.1 s，积压的旧帧对当前位姿没有意义
         scan_sub_ = this->create_subscription<sensor_msgs::msg::LaserScan>(
             scan_topic, rclcpp::QoS(1),
-            std::bind(&SioLioNode::ScanCallback, this, std::placeholders::_1));
+            std::bind(&ScanLioNode::ScanCallback, this, std::placeholders::_1));
 
         // ---- 5. 静态坐标定时重发 ----
         if (publish_static_tf_) {
             static_tf_timer_ = this->create_wall_timer(
-                std::chrono::seconds(2), std::bind(&SioLioNode::PublishStaticTf, this));
+                std::chrono::seconds(2), std::bind(&ScanLioNode::PublishStaticTf, this));
         }
 
         // ---- 6. 栅格与点云的定时发布 ----
@@ -219,7 +219,7 @@ class SioLioNode : public rclcpp::Node {
         // 也让下游（rviz2、nav2）拿到稳定的刷新节奏，与帧率无关。
         if ((publish_occupancy_ || publish_cloud_) && publish_period_ms > 0) {
             const auto period = std::chrono::milliseconds(publish_period_ms);
-            map_timer_ = this->create_wall_timer(period, std::bind(&SioLioNode::PublishMapTick, this));
+            map_timer_ = this->create_wall_timer(period, std::bind(&ScanLioNode::PublishMapTick, this));
         } else if (publish_period_ms <= 0) {
             RCLCPP_WARN(this->get_logger(),
                         "publish_period_ms = %d 非正，栅格与点云不发布", publish_period_ms);
@@ -235,7 +235,7 @@ class SioLioNode : public rclcpp::Node {
                     publish_pose_cov_ ? "开" : "关", publish_period_ms);
     }
 
-    ~SioLioNode() override {
+    ~ScanLioNode() override {
         // 冲刷排序缓冲：末尾 reorder_margin 时间段内的消息在正常运行时不会被处理，
         // 退出时按时间顺序补处理，使统计与离线管线可比。
         FlushPending();
@@ -277,7 +277,7 @@ class SioLioNode : public rclcpp::Node {
         sensor_msgs::msg::LaserScan::SharedPtr scan;
     };
 
-    // 配置路径解析：命令行/launch 传入优先；否则用安装目录下的 share/sio_lio/config/
+    // 配置路径解析：命令行/launch 传入优先；否则用安装目录下的 share/scanlio/config/
     std::string ResolveConfigPath() {
         if (!config_file_.empty()) {
             return config_file_;
@@ -286,11 +286,11 @@ class SioLioNode : public rclcpp::Node {
             // 用 get_package_share_directory 而非 Lyrical 新增的 get_package_share_path：
             // 后者在板载 Humble 上不存在，本仓库需要在两个发行版上都能构建。
             // 该函数在 Lyrical 中被标记弃用，仅产生编译告警，不影响功能。
-            const std::string share = ament_index_cpp::get_package_share_directory("sio_lio");
-            return share + "/config/sio_lio.yaml";
+            const std::string share = ament_index_cpp::get_package_share_directory("scanlio");
+            return share + "/config/scanlio.yaml";
         } catch (const std::exception& e) {
             RCLCPP_FATAL(this->get_logger(),
-                         "无法定位 sio_lio 的共享目录（%s）；请用参数 config_file 显式指定配置路径",
+                         "无法定位 scanlio 的共享目录（%s）；请用参数 config_file 显式指定配置路径",
                          e.what());
             throw;
         }
@@ -747,11 +747,11 @@ class SioLioNode : public rclcpp::Node {
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     try {
-        auto node = std::make_shared<SioLioNode>();
+        auto node = std::make_shared<ScanLioNode>();
         rclcpp::spin(node);
         node.reset();  // 析构时冲刷排序缓冲
     } catch (const std::exception& e) {
-        RCLCPP_FATAL(rclcpp::get_logger("sio_lio_node"), "节点启动失败：%s", e.what());
+        RCLCPP_FATAL(rclcpp::get_logger("scanlio_node"), "节点启动失败：%s", e.what());
         rclcpp::shutdown();
         return 1;
     }

@@ -1,5 +1,5 @@
 # ============================================================================
-# sio_lio 配置
+# scanlio 配置
 #
 # 加载方式：sad::Config cfg; cfg.LoadFromYaml("此文件路径", &err);
 #           Frontend fe(cfg.ToFrontendOptions());
