@@ -101,6 +101,8 @@ install(TARGETS scanlio_node
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY rviz
+  DESTINATION share/${PROJECT_NAME})
 
 # ============================================================================
 # 验证程序（test/ 目录不入库）

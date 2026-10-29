@@ -34,6 +34,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -114,6 +115,12 @@ def generate_launch_description():
         DeclareLaunchArgument("pose_cov_topic", default_value="/scanlio/pose_with_covariance"),
         DeclareLaunchArgument("publish_period_ms", default_value="1000"),
         DeclareLaunchArgument("reorder_margin", default_value="0.02"),
+        # 可视化：板载无图形界面时置 false，避免 rviz2 因缺 DISPLAY 而反复报错
+        DeclareLaunchArgument(
+            "use_rviz",
+            default_value="true",
+            description="是否启动 rviz2；板载 SSH 无图形界面时置 false",
+        ),
     ]
 
     # ---- 1. 雷达驱动 ----
@@ -216,4 +223,19 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription(args + [lidar_node, base_node, sio_node])
+    # ---- 4. rviz2（可选） ----
+    # 配置随包安装到 share/scanlio/rviz/scanlio.rviz，含六项显示：
+    # Grid、TF、LaserScan(/scan)、Map(/map)、Path(/trajectory)、PointCloud2(/global_point_cloud)
+    rviz_config = os.path.join(
+        get_package_share_directory("scanlio"), "rviz", "scanlio.rviz"
+    )
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", rviz_config],
+        condition=IfCondition(LaunchConfiguration("use_rviz")),
+    )
+
+    return LaunchDescription(args + [lidar_node, base_node, sio_node, rviz_node])

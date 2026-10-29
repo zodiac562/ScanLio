@@ -20,6 +20,9 @@
        不声明时 rosdep 不会安装，板载重新 colcon build 会在 cmake 配置阶段失败 -->
   <depend>yaml-cpp</depend>
 
+  <!-- rviz2 只在启动可视化时用到，缺失时不影响算法节点本身 -->
+  <exec_depend>rviz2</exec_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

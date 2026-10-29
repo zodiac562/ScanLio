@@ -32,12 +32,17 @@
                        0 或负值表示不发布这两项。
     map_frame/base_frame/laser_frame/imu_frame  坐标系名称。
     use_sim_time       回放数据包并希望 TF 使用包内时间时可置 true。
+    use_rviz           是否同时启动 rviz2，默认 true。无图形界面时置 false。
 
 注意：节点输出的坐标与轨迹都在 map 坐标系下，地图原点由第一帧扫描位姿定义。
 """
 
+import os
+
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -90,6 +95,11 @@ def generate_launch_description():
             "use_sim_time",
             default_value="false",
             description="回放数据包时置 true，TF 时间戳跟随包内时间",
+        ),
+        DeclareLaunchArgument(
+            "use_rviz",
+            default_value="true",
+            description="是否同时启动 rviz2；无图形界面（板载 SSH）时置 false",
         ),
     ]
 
@@ -146,4 +156,20 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription(args + [node])
+    # rviz2：读取包内安装的 scanlio.rviz。无图形界面时由 use_rviz:=false 关闭，
+    # 此时 rviz2 进程不启动，算法节点不受影响。
+    rviz_config = os.path.join(
+        get_package_share_directory("scanlio"), "rviz", "scanlio.rviz"
+    )
+    rviz = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", rviz_config],
+        parameters=[{"use_sim_time": ParameterValue(
+            LaunchConfiguration("use_sim_time"), value_type=bool)}],
+        condition=IfCondition(LaunchConfiguration("use_rviz")),
+    )
+
+    return LaunchDescription(args + [node, rviz])
