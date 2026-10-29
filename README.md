@@ -2,7 +2,9 @@
 
 2D 激光惯性里程计（LiDAR-Inertial Odometry），参照 NdtLIO 的 2D 变体思路实现。不使用第三方 SLAM 库。
 
-当前版本 **0.9.1**。项目用途是原理验证
+当前版本 **0.9.3**。
+
+项目用途有三项：原理验证、复现、优化。原理验证指从零实现 2D 激光惯性里程计的各个模块并逐项测量其行为；复现指按 NdtLIO 的 2D 变体逐文件对照实现，使同一份数据在两条代码路径上可比；优化指在复现基线之上做可测量的改进，包括零偏作为滤波器状态在线估计、配置集中到单一 yaml、验证程序与判定判据的补齐。三项都受同一条约束：内部指标自洽不能证明与真实运动一致，因此任何改进必须给出量化对照。
 
 ## 构成
 
@@ -21,7 +23,7 @@
 
 - `src/scanlio/`：算法核心，编译为静态库 `scanlio_core`，不链接任何 ROS 库，可在纯 C++ 环境构建与验证
 - `src/scanlio/node/`：ROS 2 节点，只做话题与算法结构体之间的转换
-- `src/scanlio/config/`：唯一配置文件 `scanlio.yaml`，五段共 24 项
+- `src/scanlio/config/`：唯一配置文件 `scanlio.yaml`，五段共 23 项
 
 ## 雷达驱动
 
@@ -105,7 +107,7 @@ ros2 launch scanlio scanlio_bringup.launch.py lidar_port:=/dev/ttyACM1 base_port
 
 ROS 参数（21 个）：话题名、坐标系名、是否发布各类输出、发布周期、排序缓冲窗口等对外接口。
 
-yaml 参数（`config/scanlio.yaml`，24 项分五段）：`init` 初始零偏、`eskf` 噪声与协方差、`ndt` 配准参数、`map` 栅格分辨率、`frontend` 关键帧与去畸变开关。
+yaml 参数（`config/scanlio.yaml`，23 项分五段）：`init` 初始零偏、`eskf` 噪声与协方差、`ndt` 配准参数、`map` 栅格分辨率、`frontend` 关键帧与去畸变开关。
 
 连接点是 ROS 参数 `config_file`：为空时节点用 `get_package_share_directory("scanlio") + "/config/scanlio.yaml"` 定位。
 
@@ -130,8 +132,8 @@ yaml 参数（`config/scanlio.yaml`，24 项分五段）：`init` 初始零偏�
 
 版本号写在本仓库三个位置，改版时同步：
 
-1. `src/scanlio/package.xml` 的 `<version>`（程序可读的来源，`0.9.0`）
-2. git tag（`v0.9.0`）与对应的 GitHub Release
+1. `src/scanlio/package.xml` 的 `<version>`（程序可读的来源，`0.9.3`）
+2. git tag（`v0.9.3`）与对应的 GitHub Release
 3. 本文件顶部的「当前版本」
 
 仓库名不带版本号。版本更迭通过 tag 与 Release 表达，不修改仓库名。
