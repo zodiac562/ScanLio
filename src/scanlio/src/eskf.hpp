@@ -21,7 +21,8 @@ namespace sad{
             double odom_var_ = 0.1;          // 轮速观测噪声
             double lidar_pos_noise_ = 0.05;  // 雷达位姿观测位置噪声
             double lidar_ang_noise_ = 0.1;   // 雷达位姿观测角度噪声
-            double imu_dt_ = 0.01;           // IMU 采样间隔
+            // 原 imu_dt_ 已删除（2026-10-29 修复 S-03）：Predict 的时间步长一律由
+            // 相邻 IMU 时间戳相减得出，固定采样间隔不参与任何计算，保留只会误导。
         };
 
         ESKF()=default;

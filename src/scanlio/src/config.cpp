@@ -94,9 +94,11 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     init_ba.y() = GetD(ni, "ba_y", init_ba.y());
 
     // ---- eskf：滤波参数 ----
+    // imu_dt 已移除（2026-10-29 修复 S-03）：Predict 的步长由相邻时间戳相减得出。
+    // 若旧配置文件仍带该键，CheckKeys 会报未知键并加载失败，提示使用者删除。
     if (!CheckKeys(root["eskf"], "eskf",
                    {"gyro_var", "acce_var", "bias_gyro_var", "bias_acce_var",
-                    "odom_var", "lidar_pos_noise", "lidar_ang_noise", "imu_dt"},
+                    "odom_var", "lidar_pos_noise", "lidar_ang_noise"},
                    err)) {
         return false;
     }
@@ -108,7 +110,6 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     eskf.odom_var_ = GetD(ne, "odom_var", eskf.odom_var_);
     eskf.lidar_pos_noise_ = GetD(ne, "lidar_pos_noise", eskf.lidar_pos_noise_);
     eskf.lidar_ang_noise_ = GetD(ne, "lidar_ang_noise", eskf.lidar_ang_noise_);
-    eskf.imu_dt_ = GetD(ne, "imu_dt", eskf.imu_dt_);
 
     // ---- ndt：配准与地图参数 ----
     if (!CheckKeys(root["ndt"], "ndt",
@@ -200,7 +201,6 @@ std::string Config::ToYamlString() const {
     os << "  odom_var: " << eskf.odom_var_ << "\n";
     os << "  lidar_pos_noise: " << eskf.lidar_pos_noise_ << "\n";
     os << "  lidar_ang_noise: " << eskf.lidar_ang_noise_ << "\n";
-    os << "  imu_dt: " << eskf.imu_dt_ << "\n";
     os << "ndt:\n";
     os << "  voxel_size: " << ndt.voxel_size_ << "\n";
     os << "  min_pts_num: " << ndt.min_pts_num_ << "\n";

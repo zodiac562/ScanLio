@@ -14,8 +14,11 @@ find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIRS})
 
 # yaml-cpp：统一配置文件的读取（来源 libyaml-cpp-dev，或 ROS 的 yaml-cpp-vendor）
+# 变量为单数：yaml-cpp 的 cmake 配置只定义 YAML_CPP_INCLUDE_DIR（见
+# /usr/lib/x86_64-linux-gnu/cmake/yaml-cpp/yaml-cpp-config.cmake）。复数名从未定义，
+# 展开后是 include_directories()，登记零个目录（2026-10-29 修复 S-01）。
 find_package(yaml-cpp REQUIRED)
-include_directories(${YAML_CPP_INCLUDE_DIRS})
+include_directories(${YAML_CPP_INCLUDE_DIR})
 
 # ROS 2 节点依赖。只有 node/ 下的可执行文件使用这些依赖；
 # 核心静态库 scanlio_core 不链接任何 ROS 库，离线验证程序仍可在纯环境中构建。
@@ -36,8 +39,40 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 # 阶段2/3/4：2D NDT 配准与 ESKF 滤波核心 + 地图管理 + 前端调度（静态库，后续前端模块复用）
 add_library(scanlio_core STATIC
   src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/occupancy_map.cpp src/frontend.cpp src/config.cpp)
-target_include_directories(scanlio_core PUBLIC ${PROJECT_SOURCE_DIR}/..)
-target_link_libraries(scanlio_core PUBLIC yaml-cpp)
+
+# 头文件搜索路径挂在目标上而不是只靠目录级 include_directories：
+#   上一级（src/）供 "scanlio/xxx.h" 形式引用，
+#   include/ 供 "frame.h"、"map.h" 这类裸名引用。
+# 导出目标时 BUILD_INTERFACE 与 INSTALL_INTERFACE 必须分开写：CMake 不允许导出
+# 目标的接口里出现源码目录路径，否则 Generate 阶段报「prefixed in the source directory」。
+# 安装后的布局镜像源码结构：install/scanlio/include/scanlio/{include,src}/...，
+# 因此使用方的两个搜索路径分别是 include 与 include/scanlio/include。
+target_include_directories(scanlio_core PUBLIC
+  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/..>
+  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include/scanlio/include>)
+# Eigen 必须作为 PUBLIC 链接项挂在目标上：公共头文件（eigen_types.h）直接 include
+# <Eigen/Core>，而目录级 include_directories 不会随导出目标传给使用者。
+target_link_libraries(scanlio_core PUBLIC yaml-cpp Eigen3::Eigen)
+
+# 头文件安装：保持 "scanlio/xxx.h" 与 "scanlio/src/xxx.hpp" 的引用形式不变。
+# 源码树里 "scanlio/common/eigen_types.h" 由 -I <包目录>/.. 命中，
+# 安装后需把 common/ 一并放到位，否则使用方在 frame.h 处即失败。
+install(DIRECTORY include/ DESTINATION include/scanlio/include)
+install(DIRECTORY common/ DESTINATION include/scanlio/common)
+# 3rdparty/sophus 以 "scanlio/3rdparty/sophus/xxx.hpp" 形式被 eigen_types.h 引用
+install(DIRECTORY 3rdparty/ DESTINATION include/scanlio/3rdparty)
+install(DIRECTORY src/ DESTINATION include/scanlio/src
+  FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h")
+
+# 安装并导出该库。原文件缺少 EXPORT 与 ament_export_*，find_package(scanlio)
+# 生成的配置文件里没有目标定义，引用 scanlio::scanlio_core 会报目标不存在。
+install(TARGETS scanlio_core
+  EXPORT scanlioTargets
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin)
 
 # ============================================================================
 # 配置文件安装
@@ -151,6 +186,8 @@ if(SCANLIO_WITH_TESTS)
   scanlio_add_test(stage4_ab_5way)
   scanlio_add_test(stage4_traj_dump)
   scanlio_add_test(stage4_undistort_effect_check)
+  # 四路对照（以直墙几何作参照）：每路落盘 traj 与 occ，指标由 stage4_wall_check.py 计算
+  scanlio_add_test(stage4_wall_check)
   # 只读接口：ESKF 协方差 / 体素中心 / 占据栅格
   scanlio_add_test(stage4_api_check)
   # 统一配置解析器
@@ -167,5 +204,14 @@ if(SCANLIO_TEST_TARGETS)
 else()
   message(STATUS "scanlio: 未登记任何验证程序，仅构建 scanlio_core")
 endif()
+
+# 导出声明必须在 ament_package() 之前。
+# HAS_LIBRARY_TARGET 不可省：缺它时使用者能链接，但安装后运行时找不到库。
+# 相对路径被 ament 拼成 ${prefix}/<路径>（不加 include 前缀），故需显式写 include。
+ament_export_targets(scanlioTargets HAS_LIBRARY_TARGET)
+ament_export_include_directories(include include/scanlio/include)
+# 导出目标里含有 Eigen3::Eigen 与 yaml-cpp，使用方必须先 find_package 才能解析，
+# 否则 CMake 在读取 scanlioTargetsExport.cmake 时报「target was not found」。
+ament_export_dependencies(Eigen3 yaml-cpp)
 
 ament_package()
