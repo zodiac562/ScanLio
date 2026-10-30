@@ -1,49 +1,40 @@
 # scanlio
 
-2D 激光惯性里程计（LiDAR-Inertial Odometry），参照 NdtLIO 的 2D 变体思路实现。不使用第三方 SLAM 库。
+这是一个用 C++ 手写的 2D 激光惯性里程计。它只用单个单线激光雷达、一个 IMU 和一个轮速计，在平面上估计车体的位置与朝向。配准、滤波、地图三部分都是自己实现的，不依赖 Cartographer、LIO-SAM 这类 SLAM 框架。
 
-当前版本 **0.9.3**。
+当前版本 1.0.0。
 
-项目用途有三项：原理验证、复现、优化。原理验证指从零实现 2D 激光惯性里程计的各个模块并逐项测量其行为；复现指按 NdtLIO 的 2D 变体逐文件对照实现，使同一份数据在两条代码路径上可比；优化指在复现基线之上做可测量的改进，包括零偏作为滤波器状态在线估计、配置集中到单一 yaml、验证程序与判定判据的补齐。三项都受同一条约束：内部指标自洽不能证明与真实运动一致，因此任何改进必须给出量化对照。
+## 为什么写这个
 
-## 构成
+写它有三个目的，三者有先后关系。
 
-`src/` 下四个 ROS 2 包：
+第一是理解原理。NdtLIO 是一个结构清晰的 2D 激光惯性里程计参考实现，但它把若干工程细节压缩在少数几个文件里，直接读容易只记住写法而不知道每一步为什么存在。这个项目按 NdtLIO 的结构逐文件重写，每写一个模块就用一组可执行的验证程序测它的行为，例如"静止时位置应当不漂"、"给定错误零偏初值应当收敛到真值"。验证程序与判定阈值都留在源码树里，可以随时重跑。
 
-| 包 | 作用 | 是否随仓库分发 |
-|---|---|---|
-| `scanlio` | 算法本体：NDT 配准、ESKF 滤波、地图与占据栅格、前端调度、ROS 2 节点 | 是 |
-| `car_base_v2` | 底盘驱动，发布 IMU 与轮速 | 是 |
-| `origincar_msg` | 轮速消息定义 | 是 |
-| `serial` | 串口库（目录名 `serial_ros2`，包名 `serial`） | 是 |
+第二是提供一条可对照的代码路径。同一份数据既能走这个项目，也能走 NdtLIO 原版，两者在模块划分上对应，因此差异可以定位到具体函数，而不是"两个结果不一样"。
 
-`lslidar_driver` 与 `lslidar_msgs`（镭神 N10 雷达驱动与消息定义）采用 GPL-3.0，**不随本仓库分发**，见「雷达驱动」一节。
+第三是在这条基线上做可测量的改进。已经完成的包括：把零偏作为滤波器的状态在线估计、把散落在代码里的参数收拢到单一配置文件、把实验性改动以可切换的开关形式保留下来。
 
-`scanlio` 内部分三层：
+三个目的共用一条约束：程序内部的指标自洽，不能证明它与真实运动一致。因此任何"更好"的说法都必须先给出量化对照，没有对照就只描述现象，不下结论。
 
-- `src/scanlio/`：算法核心，编译为静态库 `scanlio_core`，不链接任何 ROS 库，可在纯 C++ 环境构建与验证
-- `src/scanlio/node/`：ROS 2 节点，只做话题与算法结构体之间的转换
-- `src/scanlio/config/`：唯一配置文件 `scanlio.yaml`，五段共 23 项
+## 仓库构成
 
-## 雷达驱动
+`src/` 下是四个 ROS 2 包。
 
-本仓库不含雷达驱动。使用实机时需自行获取 `lslidar_driver` 与 `lslidar_msgs`，放入 `src/` 后一并构建。二者采用 GPL-3.0，与本仓库的 Apache-2.0 不同，复制或分发前请自行确认条款。
+`scanlio` 是算法本体，包含 NDT 配准、误差状态卡尔曼滤波、体素地图与占据栅格、前端调度，以及一个 ROS 2 节点。这个包内部又分三层：`src/` 是算法核心，编译成静态库 `scanlio_core`，不链接任何 ROS 库，因此可以在没有 ROS 的环境里单独构建与验证；`node/` 只有一个节点程序，负责话题与算法数据结构之间的转换，不含算法逻辑；`config/` 存放唯一一份配置文件 `scanlio.yaml`。
 
-不接实机、仅用已录制数据回放时，不需要这两个包。
+`car_base_v2` 是底盘驱动，从串口读取 IMU 与轮速，发布到 `/imu` 与 `/robotvel`。`origincar_msg` 定义轮速消息的类型。`serial` 是它使用的串口库，目录名为 `serial_ros2`，包名为 `serial`。这四个包随仓库分发。
+
+`lslidar_driver` 与 `lslidar_msgs` 是镭神 N10 雷达的驱动与消息定义，采用 GPL-3.0 许可，与本仓库的 Apache-2.0 不同，因此不随仓库分发。使用实机时需要自行从厂商渠道获取，放进 `src/` 后一起构建。如果只回放已录制的数据、不接硬件，则不需要这两个包。
 
 ## 依赖
 
-ROS 2（在 Lyrical 与 Humble 上均验证过），以及：
+运行需要 ROS 2。本项目在 Ubuntu 26.04 的 Lyrical 与 Ubuntu 22.04 的 Humble 上都构建过。
 
-```
-Eigen3        libeigen3-dev
-yaml-cpp      libyaml-cpp-dev
-rclcpp / sensor_msgs / nav_msgs / geometry_msgs / tf2_ros / ament_index_cpp
-```
+除 ROS 2 之外还需要：Eigen3（`libeigen3-dev`）、yaml-cpp（`libyaml-cpp-dev`），以及 `rclcpp`、`sensor_msgs`、`nav_msgs`、`geometry_msgs`、`tf2_ros`、`ament_index_cpp` 这几个 ROS 包。
 
-驱动包另需 `libpcap-dev`、`libpcl-all-dev`、`libboost-thread-dev`。
+两个雷达驱动包另外需要 `libpcap-dev`、`libpcl-all-dev`、`libboost-thread-dev`。
 
-Sophus 以源码形式放在 `src/scanlio/3rdparty/sophus/`，无需单独安装。
+Sophus 以源码形式放在 `src/scanlio/3rdparty/sophus/`，不需要单独安装。
 
 ## 构建
 
@@ -52,13 +43,13 @@ cd slam_ws
 colcon build --packages-select scanlio
 ```
 
-只构建算法包时用 `--packages-select scanlio`；构建全部包需完整的 ROS 2 与上列系统依赖。
+只构建算法包时用上面这条命令，它不需要两个雷达驱动包。构建全部包需要完整的 ROS 2 环境与上面列出的系统依赖。
 
-`src/scanlio/CMakeLists.txt` 通过两级判定兼容两个发行版（Lyrical 有聚合导入目标，Humble 只有 `ament_target_dependencies`），因此同一份源码可在两个版本上构建。
+`src/scanlio/CMakeLists.txt` 里有一处需要说明：两个 ROS 2 发行版导出的 CMake 目标不同，Lyrical 为每个包导出聚合目标 `包名::包名`，Humble 只提供 `ament_target_dependencies` 宏。项目为此写了 `scanlio_link_dep`，先检查聚合目标是否存在，不存在再退回宏调用，因此同一份源码可以在两个版本上构建。
 
 ## 运行
 
-回放数据包：
+回放已录制的数据包时，先启动算法节点，再回放数据：
 
 ```bash
 source /opt/ros/<distro>/setup.bash
@@ -66,86 +57,94 @@ source install/setup.bash
 ros2 launch scanlio scanlio_node.launch.py
 ```
 
-实机整合启动（雷达驱动 + 底盘驱动 + 算法节点）：
+接实机时用整合启动，它按下表顺序拉起雷达驱动、底盘驱动与算法节点：
 
 ```bash
 ros2 launch scanlio scanlio_bringup.launch.py
 ```
 
-串口设备名颠倒时用参数覆盖：
+两个串口设备名如果颠倒，用参数覆盖默认值：
 
 ```bash
 ros2 launch scanlio scanlio_bringup.launch.py lidar_port:=/dev/ttyACM1 base_port:=/dev/ttyACM0
 ```
 
-`scanlio_bringup.launch.py` 会启动 `lslidar_driver`，未放置该包时整合启动失败，此时用单节点 launch 配合已有的雷达驱动。
+整合启动会拉起 `lslidar_driver`，未放置该包时命令会在加载 launch 文件阶段就失败，报 `PackageNotFoundError`。此时应改用单节点启动，配合已经独立运行的雷达驱动。
 
-## 订阅与发布
+## 话题
 
-订阅：
+节点从三个话题取数据。`/scan` 是单线激光雷达的一圈测距，类型为 `sensor_msgs/LaserScan`；`/imu` 是角速度与比力，类型为 `sensor_msgs/Imu`；`/robotvel` 是轮速，类型为 `origincar_msg/Data`，其中 `x` 字段是车体前向速度，`y` 与 `z` 字段在该底盘上恒为 0。
 
-| 话题 | 类型 | 内容 |
-|---|---|---|
-| `/scan` | `sensor_msgs/LaserScan` | 单线激光雷达 |
-| `/imu` | `sensor_msgs/Imu` | 角速度与比力 |
-| `/robotvel` | `origincar_msg/Data` | 轮速，字段 `x` 为前向速度 |
+节点向四个话题发数据。`/trajectory` 每处理一帧雷达追加一个位姿，类型为 `nav_msgs/Path`；`/map` 是按固定周期发布的占据栅格，类型为 `nav_msgs/OccupancyGrid`；`/global_point_cloud` 是 NDT 体素的中心点，用于观察配准依据的形状；`/scanlio/pose_with_covariance` 是当前位姿与协方差，类型为 `geometry_msgs/PoseWithCovarianceStamped`。
 
-发布：
+除话题之外，节点还发布坐标变换：`map` 到车体的动态变换每帧更新，车体到雷达、车体到 IMU 的两条静态变换每两秒重发一次。两条静态变换在本项目里是恒等变换，因为外参按零偏移处理。
 
-| 话题 | 类型 | 内容 |
-|---|---|---|
-| `/trajectory` | `nav_msgs/Path` | 轨迹，每帧一个位姿 |
-| `/map` | `nav_msgs/OccupancyGrid` | 占据栅格，按周期发布 |
-| `/global_point_cloud` | `sensor_msgs/PointCloud2` | NDT 体素中心 |
-| `/scanlio/pose_with_covariance` | `geometry_msgs/PoseWithCovarianceStamped` | 位姿与协方差 |
-
-另发布 `map → base_frame` 动态 TF，以及 `base_frame → laser_frame`、`base_frame → imu_frame` 静态 TF。
+`/map` 的 QoS 用的是 `TRANSIENT_LOCAL`，这一点与其它话题不同。原因在于算法节点通常先启动、rviz 后启动，如果地面用默认的 `VOLATILE`，后启动的订阅者要等到下一个发布周期才有画面，而如果那时没有新地图，画面会一直空白。
 
 ## 参数
 
-两套，各管各的键：
+参数分成两套，各自管理互不重叠的键。
 
-ROS 参数（21 个）：话题名、坐标系名、是否发布各类输出、发布周期、排序缓冲窗口等对外接口。
+第一套是 ROS 参数，共 21 个，管对外接口：话题名、坐标系名、各类输出的开关与话题名、发布周期、排序缓冲窗口。这些都可以在 launch 或命令行上覆盖。
 
-yaml 参数（`config/scanlio.yaml`，23 项分五段）：`init` 初始零偏、`eskf` 噪声与协方差、`ndt` 配准参数、`map` 栅格分辨率、`frontend` 关键帧与去畸变开关。
+第二套是 yaml 参数，存放在 `config/scanlio.yaml`，分六段共 34 项。`init` 是静止标定得到的初始零偏；`eskf` 是松耦合滤波器的噪声与协方差；`ieskf` 是紧耦合滤波器的噪声；`ndt` 是配准参数；`map` 是占据栅格分辨率；`frontend` 是关帧判定与滤波器路由。
 
-连接点是 ROS 参数 `config_file`：为空时节点用 `get_package_share_directory("scanlio") + "/config/scanlio.yaml"` 定位。
+两套参数通过 ROS 参数 `config_file` 连接。该参数为空时，节点用 `get_package_share_directory("scanlio")` 找到安装目录，再拼上 `config/scanlio.yaml`。注意这个默认路径指向 `install/` 下的副本，修改源码树里的 yaml 不会影响它，除非重新构建。
+
+`eskf` 与 `ieskf` 两段的数值含义不同，这一点容易出错。`eskf` 段的键名以 `_var` 结尾，值直接当作方差使用；`ieskf` 段的键名以 `_std` 结尾，值是标准差，代码内部再平方。分成两段而不是共用一份数值，就是因为这两套语义混在一起会静默改变量级。
 
 ## 算法概要
 
-- 配准：2D NDT。体素内统计均值与协方差，高斯-牛顿迭代求增量，马氏距离做卡方剔除。体素使用 LRU 淘汰。
-- 滤波：8 维误差状态 ESKF，状态为 `p(2) v(2) θ bg ba(2)`。观测有两个来源：轮速的前向速度、雷达的配准位姿。零偏作为滤波器状态在线估计，观测更新后写回名义零偏。
-- 零偏随机游走方差取实测值（陀螺 1.43e-5、加计 9.25e-5，每步）。
-- 去畸变：雷达一帧 0.1 秒内车在运动，按逐点时刻把点统一到帧尾时刻，位姿由 IMU 缓冲插值。
-- 地图：占据栅格用射线追踪计数法（hits / hits+misses），容器使用有序 `std::map` 保证输出顺序可复现。
-- 调度：三个话题的消息进入按 (时间戳, 类型) 排序的缓冲，等窗口满足后按时间顺序处理，用于抵消回调触发顺序与时间戳顺序不一致。
+**配准**用 2D NDT。地图被切成边长 0.65 米的体素，每个体素统计落入其内点的均值与协方差，配准时用高斯-牛顿迭代求位姿增量。每个点会先在自身与周围八个体素中选马氏距离最小的一个作为对应，马氏距离超过卡方阈值的点被剔除，不参与本例累加，目的是避免外点把迭代方向拉偏。体素按最近使用顺序管理，数量超过上限时淘汰最久未更新的。
+
+**滤波**部分有两条并列的路径，状态都是 8 维：位置、速度、朝向、陀螺零偏、加计零偏。零偏是滤波器的状态而不是常量，每次观测更新后会把估计出来的零偏写回名义状态。
+
+第一条是 `ESKF`，属于松耦合，也是默认路径。NDT 自己迭代到收敛，输出一个位姿，滤波器把这个位姿当作三维观测接收。轮速在这一条路径上是标量观测，只约束车体前向速度。
+
+第二条是 `IESKF2D`，属于紧耦合。NDT 不再自己求解，只把每个点的 8 维雅可比与体素信息矩阵累加成两个量交给滤波器，迭代、状态注入与协方差更新都在滤波器内部完成。轮速在这条路径上是二维观测，观测值由车体速度 `(v, 0)` 旋转到世界系得到，其中第二个分量恒为零。
+
+第二条路径的第二维需要说明清楚：它不是测量值。底盘消息里虽然有横向速度字段，但该底盘的固件不填它，实测恒为 0。紧耦合在这里把"车体不能横移"当作一个约束写进滤波器，这是差速底盘成立的运动学假设，不是传感器给出的信息。
+
+两条路径的切换只改 `frontend.filter_type`，不改代码。默认仍然是 `eskf`，改动前后既有指标逐位一致。
+
+**去畸变**处理的是雷达一帧扫描需要 0.1 秒的问题。这 0.1 秒里车在移动，一圈点上各点的采样时刻不同，直接当作同一时刻会把运动的位移算进形状里。程序按每个点自己的采样时刻，用 IMU 缓冲插值出该时刻的位姿，再把点统一搬到帧尾时刻的坐标系。
+
+**地图**用射线追踪计数法。每条射线沿途经过的体素记一次穿过，终点所在的体素记一次命中，占据概率取命中次数除以总次数。容器用的是有序的 `std::map` 而不是哈希表，这样同一份输入每次遍历顺序相同，输出可以复现。
+
+**调度**处理的是三个话题的到达顺序问题。IMU 与雷达的时间戳顺序和回调触发顺序不一定一致，如果按回调顺序处理，一帧雷达可能在它需要的 IMU 数据之前就被处理。程序把三个话题的消息放进一个按时间戳排序的缓冲，等窗口满足后再按时间顺序统一推进。代价是引入等长的时延。
 
 ## 已知限制
 
-- 仅支持单线 2D 雷达，位姿只有 `x, y, θ`，`z` 恒为 0。
-- 无回环检测，长距离行驶的累积漂移无法消除。
-- 无退化检测与零速更新，几何退化段（如贴墙、空旷）的配准行为未做专门抑制。
-- 去畸变的帧内运动模型为线性插值，高速转弯时误差会增大。
-- 参数以单线 N10（约 444 点/圈、10 Hz）标定，更换雷达需重新标定 `ndt.voxel_size` 与 `ndt.min_pts_num`。
+只支持单线 2D 雷达，位姿只有平面三个自由度，高度恒为零。
+
+没有回环检测，长距离行驶的累积漂移无法消除。
+
+没有退化检测，也没有零速更新。走廊这类长直场景横向约束弱，贴墙或空旷处配准的几何条件差，程序不对这些情况做专门抑制。实测中堵转时位姿不漂，但那是"位置只由雷达位姿观测更新"这一结构的副作用，不是专门设计。
+
+去畸变的帧内运动模型用线性插值，高速转弯时误差会增大。
+
+参数按单线 N10 标定（约 444 点一圈，10 Hz）。换雷达需要重新标定 `ndt.voxel_size` 与 `ndt.min_pts_num`，其中 `min_pts_num` 必须低于单个体素的典型点数，否则大量体素无法生效。
+
+紧耦合路径的 `num_iterations`、`eps`、`info_ratio` 三项沿用 NdtLIO 原版取值，没有按本项目的数据重新标定。本项目体素信息矩阵的量级与原版不同，两条路径在长走廊末段的分歧可达米级。现有数据缺独立真值，无法判定哪一条更接近真实运动，因此紧耦合路径目前只作为可切换的对照，不作为默认。
 
 ## 版本与发布
 
-版本号写在本仓库三个位置，改版时同步：
+版本号写在三个位置，改版时需要同步：`src/scanlio/package.xml` 的 `<version>`，git tag 与对应的 GitHub Release，以及本文件开头的「当前版本」。
 
-1. `src/scanlio/package.xml` 的 `<version>`（程序可读的来源，`0.9.3`）
-2. git tag（`v0.9.3`）与对应的 GitHub Release
-3. 本文件顶部的「当前版本」
+仓库名不带版本号。版本更迭通过 tag 与 Release 表达，不改仓库名。
 
-仓库名不带版本号。版本更迭通过 tag 与 Release 表达，不修改仓库名。
+1.0.0 的定位是接口稳定：配置文件的分段与键名、两条滤波路径的切换方式、话题与参数集合，在后续版本中保持兼容。新增功能以可选开关的形式加入，不改变默认行为。
 
 ## 许可
 
 本仓库自有代码采用 Apache License 2.0，全文见 `LICENSE`，版权声明见 `NOTICE`。
 
-随仓库分发的第三方组件及其许可见 `THIRD_PARTY.md`。雷达驱动为 GPL-3.0，不随本仓库分发。
+随仓库分发的第三方组件及其许可见 `THIRD_PARTY.md`。两个雷达驱动包为 GPL-3.0，不随本仓库分发。
 
 ## 不随仓库分发的内容
 
-- 数据集（rosbag）：自行录制，不进仓库。
-- 验证程序与实验记录：位于 `.gitignore` 排除的 `test/` 与 `doc/`。
-- `lslidar_driver`、`lslidar_msgs`：GPL-3.0，需从厂商渠道获取。
+数据集（rosbag）由使用者自行录制，不进仓库。
+
+验证程序与实验记录位于被 `.gitignore` 排除的 `test/` 与 `doc/` 目录，不随仓库分发。仓库里能构建的是算法本体与节点。
+
+`lslidar_driver` 与 `lslidar_msgs` 为 GPL-3.0，需从厂商渠道获取。
