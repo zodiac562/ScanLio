@@ -59,8 +59,9 @@ bool GetB(const YAML::Node& n, const char* k, bool dflt) {
 }  // namespace
 
 Frontend::Options Config::ToFrontendOptions() const {
-    Frontend::Options fo = frontend;      // 取 5 个自有字段
-    fo.eskf_opts_ = eskf;                 // 注入滤波参数
+    Frontend::Options fo = frontend;      // 取自有字段（含 filter_type_）
+    fo.eskf_opts_ = eskf;                 // 注入松耦合滤波参数
+    fo.ieskf_opts_ = ieskf;               // 注入紧耦合滤波参数
     fo.map_opts_.ndt_opts_ = ndt;         // 注入配准参数
     fo.map_opts_.occu_opts_ = occu;       // 注入占据栅格参数
     return fo;
@@ -79,8 +80,8 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
         return false;
     }
 
-    // 顶层只允许 init / eskf / ndt / map / frontend 五个段
-    if (!CheckKeys(root, "根节点", {"init", "eskf", "ndt", "map", "frontend"}, err)) {
+    // 顶层只允许 init / eskf / ieskf / ndt / map / frontend 六个段
+    if (!CheckKeys(root, "根节点", {"init", "eskf", "ieskf", "ndt", "map", "frontend"}, err)) {
         return false;
     }
 
@@ -111,6 +112,28 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     eskf.lidar_pos_noise_ = GetD(ne, "lidar_pos_noise", eskf.lidar_pos_noise_);
     eskf.lidar_ang_noise_ = GetD(ne, "lidar_ang_noise", eskf.lidar_ang_noise_);
 
+    // ---- ieskf：紧耦合滤波参数 ----
+    // 与 eskf 段的差别在语义：本段键名统一带 _std 后缀，值为标准差，
+    // IESKF2D 内部平方成方差。两段不共用数值，避免量级被静默改变。
+    if (!CheckKeys(root["ieskf"], "ieskf",
+                   {"gyro_std", "acce_std", "bias_gyro_std", "bias_acce_std", "odom_std",
+                    "num_iterations", "eps", "info_ratio",
+                    "update_bias_gyro", "update_bias_acce"},
+                   err)) {
+        return false;
+    }
+    const YAML::Node nk = root["ieskf"];
+    ieskf.gyro_std_ = GetD(nk, "gyro_std", ieskf.gyro_std_);
+    ieskf.acce_std_ = GetD(nk, "acce_std", ieskf.acce_std_);
+    ieskf.bias_gyro_std_ = GetD(nk, "bias_gyro_std", ieskf.bias_gyro_std_);
+    ieskf.bias_acce_std_ = GetD(nk, "bias_acce_std", ieskf.bias_acce_std_);
+    ieskf.odom_std_ = GetD(nk, "odom_std", ieskf.odom_std_);
+    ieskf.num_iterations_ = GetI(nk, "num_iterations", ieskf.num_iterations_);
+    ieskf.eps_ = GetD(nk, "eps", ieskf.eps_);
+    ieskf.info_ratio_ = GetD(nk, "info_ratio", ieskf.info_ratio_);
+    ieskf.update_bias_gyro_ = GetB(nk, "update_bias_gyro", ieskf.update_bias_gyro_);
+    ieskf.update_bias_acce_ = GetB(nk, "update_bias_acce", ieskf.update_bias_acce_);
+
     // ---- ndt：配准与地图参数 ----
     if (!CheckKeys(root["ndt"], "ndt",
                    {"voxel_size", "min_pts_num", "max_pts_num", "max_capacity",
@@ -138,11 +161,25 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     // ---- frontend：调度参数 ----
     if (!CheckKeys(root["frontend"], "frontend",
                    {"keyframe_dist_th", "keyframe_rot_th_deg", "imu_buffer_size",
-                    "use_filtered_pose_for_map", "enable_undistort"},
+                    "use_filtered_pose_for_map", "enable_undistort", "filter_type"},
                    err)) {
         return false;
     }
     const YAML::Node nf = root["frontend"];
+
+    // 滤波器路由：字符串转枚举。拼错时报错而不是静默回退到默认值，
+    // 因为静默回退会让「切换了但没生效」难以发现。
+    if (nf["filter_type"]) {
+        const std::string ft = nf["filter_type"].as<std::string>();
+        if (ft == "eskf") {
+            frontend.filter_type_ = Frontend::Options::FilterType::kEskf;
+        } else if (ft == "ieskf") {
+            frontend.filter_type_ = Frontend::Options::FilterType::kIeskf;
+        } else {
+            if (err) *err = "frontend.filter_type 只能是 eskf 或 ieskf，实际为：" + ft;
+            return false;
+        }
+    }
     frontend.keyframe_dist_th_ = GetD(nf, "keyframe_dist_th", frontend.keyframe_dist_th_);
     // 角度以「度」书写，便于读数；结构体内为弧度
     const double rot_deg = GetD(nf, "keyframe_rot_th_deg",
@@ -179,6 +216,16 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
         if (err) *err = "eskf 中 odom_var / lidar_pos_noise / lidar_ang_noise 必须为正";
         return false;
     }
+    // ieskf 段即使未被选中也要自洽：一旦切到 ieskf，非法的标准差会直接产生 nan
+    if (ieskf.gyro_std_ <= 0.0 || ieskf.acce_std_ <= 0.0 || ieskf.bias_gyro_std_ <= 0.0 ||
+        ieskf.bias_acce_std_ <= 0.0 || ieskf.odom_std_ <= 0.0) {
+        if (err) *err = "ieskf 中五项标准差必须为正";
+        return false;
+    }
+    if (ieskf.num_iterations_ < 1 || ieskf.eps_ <= 0.0 || ieskf.info_ratio_ <= 0.0) {
+        if (err) *err = "ieskf 中 num_iterations 不得小于 1，eps 与 info_ratio 必须为正";
+        return false;
+    }
     if (frontend.imu_buffer_size_ < 2) {
         // 去畸变插值需要至少两条位姿
         if (err) *err = "frontend.imu_buffer_size 不得小于 2（插值需要两条位姿）";
@@ -201,6 +248,17 @@ std::string Config::ToYamlString() const {
     os << "  odom_var: " << eskf.odom_var_ << "\n";
     os << "  lidar_pos_noise: " << eskf.lidar_pos_noise_ << "\n";
     os << "  lidar_ang_noise: " << eskf.lidar_ang_noise_ << "\n";
+    os << "ieskf:\n";
+    os << "  gyro_std: " << ieskf.gyro_std_ << "\n";
+    os << "  acce_std: " << ieskf.acce_std_ << "\n";
+    os << "  bias_gyro_std: " << ieskf.bias_gyro_std_ << "\n";
+    os << "  bias_acce_std: " << ieskf.bias_acce_std_ << "\n";
+    os << "  odom_std: " << ieskf.odom_std_ << "\n";
+    os << "  num_iterations: " << ieskf.num_iterations_ << "\n";
+    os << "  eps: " << ieskf.eps_ << "\n";
+    os << "  info_ratio: " << ieskf.info_ratio_ << "\n";
+    os << "  update_bias_gyro: " << (ieskf.update_bias_gyro_ ? "true" : "false") << "\n";
+    os << "  update_bias_acce: " << (ieskf.update_bias_acce_ ? "true" : "false") << "\n";
     os << "ndt:\n";
     os << "  voxel_size: " << ndt.voxel_size_ << "\n";
     os << "  min_pts_num: " << ndt.min_pts_num_ << "\n";
@@ -219,6 +277,9 @@ std::string Config::ToYamlString() const {
     os << "  use_filtered_pose_for_map: "
        << (frontend.use_filtered_pose_for_map_ ? "true" : "false") << "\n";
     os << "  enable_undistort: " << (frontend.enable_undistort_ ? "true" : "false") << "\n";
+    os << "  filter_type: "
+       << (frontend.filter_type_ == Frontend::Options::FilterType::kIeskf ? "ieskf" : "eskf")
+       << "\n";
     return os.str();
 }
 

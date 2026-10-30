@@ -71,6 +71,25 @@ namespace sad{
         */
         int match(SE2& pose,const std::vector<Eigen::Vector2d>& scan);
 
+        /*
+        紧耦合专用：只累加观测矩阵，不更新位姿。
+
+        供 IESKF2D 使用。给定线性化点 pose，遍历点云并把每个点的贡献累加到
+        HT_Vinv_H（8x8，即 Σ JᵀΩJ）与 HT_Vinv_r（8x1，即 Σ -JᵀΩr），
+        迭代与状态更新由调用方完成。
+
+        与 match 的差别：
+          - 雅可比是 2x8（对 p(2) v(2) θ bg ba(2)），不是 2x3；
+          - 不求解正规方程，不修改 pose；
+          - 归属判定与卡方剔除逻辑与 match 完全一致，保证两条路径的匹配点集合相同。
+
+        返回参与累加的有效点数。调用方可用它判断本帧是否可信。
+        */
+        int compute_residual_and_jacobians(const SE2& pose,
+                                           const std::vector<Eigen::Vector2d>& scan,
+                                           Mat8d& HT_Vinv_H,
+                                           Vec8d& HT_Vinv_r) const;
+
         // 只读观测接口：当前体素数量（验证 LRU 淘汰与容量守卫用）
         size_t num_voxels() const { return data_.size(); }
         size_t num_indexed() const { return grids_.size(); }
@@ -112,7 +131,8 @@ namespace sad{
         生成体素网格id的邻域
         返回邻域网格id的集合
         */
-        std::vector<Vec2i> generate_nearby_grids(const Vec2i& grid_id);
+        // const：compute_residual_and_jacobians 是只读函数，需要调用它
+        std::vector<Vec2i> generate_nearby_grids(const Vec2i& grid_id) const;
     };
 
 }

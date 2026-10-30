@@ -4,7 +4,7 @@
 #include <limits>
 
 namespace sad{
-    std::vector<Vec2i> NDT2D::generate_nearby_grids(const Vec2i& grid_id){
+    std::vector<Vec2i> NDT2D::generate_nearby_grids(const Vec2i& grid_id) const {
         std::vector<Vec2i> nearby_grids;
         for (int i = -1; i <= 1; i++)
         {
@@ -204,6 +204,65 @@ namespace sad{
             if (dxi.norm() < options_.eps_) {
                 break;
             }
+        }
+        return effective_pts;
+    }
+
+    int NDT2D::compute_residual_and_jacobians(const SE2& pose,
+                                              const std::vector<Eigen::Vector2d>& scan,
+                                              Mat8d& HT_Vinv_H,
+                                              Vec8d& HT_Vinv_r) const {
+        HT_Vinv_H.setZero();
+        HT_Vinv_r.setZero();
+        int effective_pts = 0;
+
+        for (const auto& p : scan) {
+            const Vec2d p0 = pose * p;
+            const int gx = (int)std::floor(p0.x() / options_.voxel_size_);
+            const int gy = (int)std::floor(p0.y() / options_.voxel_size_);
+
+            // 归属判定与 match 完全一致：9 邻域内取马氏距离最小的已生效格子
+            const VoxelGrid* best = nullptr;
+            double best_maha2 = std::numeric_limits<double>::max();
+            for (const auto& key : generate_nearby_grids(Vec2i(gx, gy))) {
+                auto iter_grid = grids_.find(key);
+                if (iter_grid == grids_.end()) continue;
+                const VoxelGrid& vg = iter_grid->second->second;
+                if (!vg.estimate()) continue;
+                const Vec2d r = p0 - vg.mean_;
+                const double maha2 = r.dot(vg.info_ * r);
+                if (maha2 < best_maha2) {
+                    best_maha2 = maha2;
+                    best = &vg;
+                }
+            }
+            if (best == nullptr) continue;
+
+            // 卡方剔除，阈值与 match 共用同一个配置项
+            if (std::isnan(best_maha2) || best_maha2 > options_.res_outlier_th_) {
+                continue;
+            }
+
+            // 8 维雅可比。位置两列为单位阵；角度一列须用「车体系点」推导：
+            //   p0 = R(θ)·p + t  ⇒  ∂p0/∂θ = R(θ)·[-p_y, p_x]
+            // 注意这里与 match 的 3 维雅可比 [-p0.y, p0.x] 不同，原因是两者的
+            // 状态增量定义不同：
+            //   match   位姿左乘 exp(ξ)（pose ← exp(ξ)·pose），平移与旋转同时作用，
+            //           故 ∂p0/∂δθ = [-p0.y, p0.x]；
+            //   IESKF2D 分别把增量加到 θ 与 p 上（θ += δθ, p += δp），平移不随 θ 变，
+            //           故 ∂p0/∂δθ = R·[-p_y, p_x]，与 NdtLIO 原版 ndt_inc.cpp:295 一致。
+            // 把两者混用会让紧耦合的角度梯度带上平移偏置，在长走廊末段发散。
+            const double c = std::cos(pose.so2().log());
+            const double s = std::sin(pose.so2().log());
+            Eigen::Matrix<double, 2, 8> J = Eigen::Matrix<double, 2, 8>::Zero();
+            J(0, 0) = 1.0;
+            J(1, 1) = 1.0;
+            J(0, 4) = -c * p.y() - s * p.x();
+            J(1, 4) = -s * p.y() + c * p.x();
+
+            HT_Vinv_H += J.transpose() * best->info_ * J;
+            HT_Vinv_r += -J.transpose() * best->info_ * (p0 - best->mean_);
+            ++effective_pts;
         }
         return effective_pts;
     }

@@ -38,7 +38,8 @@ include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # 阶段2/3/4：2D NDT 配准与 ESKF 滤波核心 + 地图管理 + 前端调度（静态库，后续前端模块复用）
 add_library(scanlio_core STATIC
-  src/ndt_2d.cpp src/eskf.cpp src/map.cpp src/occupancy_map.cpp src/frontend.cpp src/config.cpp)
+  src/ndt_2d.cpp src/eskf.cpp src/ieskf_2d.cpp src/map.cpp src/occupancy_map.cpp
+  src/frontend.cpp src/config.cpp)
 
 # 头文件搜索路径挂在目标上而不是只靠目录级 include_directories：
 #   上一级（src/）供 "scanlio/xxx.h" 形式引用，
@@ -178,6 +179,8 @@ if(SCANLIO_WITH_TESTS)
   scanlio_add_test(stage3_eskf_test)
   # 零偏作为滤波器状态的在线收敛（给错误初值，看是否朝真值靠近）
   scanlio_add_test(stage3_bias_convergence_test)
+  # 迭代滤波 IESKF2D（递推 / 零偏 / 轮速 / 紧耦合观测）
+  scanlio_add_test(stage3_ieskf_test)
   # 阶段4：NDT 增强、地图管理、管线验收、可视化
   scanlio_add_test(stage4_ndt_enhance_check)
   scanlio_add_test(stage4_map_check)

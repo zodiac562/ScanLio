@@ -6,14 +6,23 @@ namespace sad{
 
 Frontend::Frontend(const Options& options) : options_(options) {
     // 用 options 中的嵌套参数构造子系统（此前用默认值，外部无法配置）
-    eskf_ = std::make_shared<ESKF>(options_.eskf_opts_);
+    // 滤波器按 filter_type_ 二选一，另一侧保持空指针，供各入口判别。
+    if (options_.filter_type_ == Options::FilterType::kIeskf) {
+        ieskf_ = std::make_shared<IESKF2D>(options_.ieskf_opts_);
+    } else {
+        eskf_ = std::make_shared<ESKF>(options_.eskf_opts_);
+    }
     map_  = std::make_shared<Map>(options_.map_opts_);
 }
 
-// IMU 入口：交给 ESKF 预测，并把预测位姿存入缓冲（去畸变用）
+// IMU 入口：交给当前滤波器预测，并把预测位姿存入缓冲（去畸变用）
 void Frontend::ProcessImu(const Imu& imu) {
-    eskf_->Predict(imu);
-    imu_buffer_.push_back({imu.timestamp_, eskf_->GetNominalPose()});
+    if (ieskf_) {
+        ieskf_->Predict(imu);
+    } else {
+        eskf_->Predict(imu);
+    }
+    imu_buffer_.push_back({imu.timestamp_, NominalPose()});
 
     // 缓冲容量守卫：超限时丢最旧的（时间太老的位姿对当前帧去畸变无用）
     if (imu_buffer_.size() > options_.imu_buffer_size_) {
@@ -21,9 +30,18 @@ void Frontend::ProcessImu(const Imu& imu) {
     }
 }
 
-// 轮速入口：交给 ESKF 观测
+// 轮速入口：交给当前滤波器观测
 void Frontend::ProcessOdom(const Odom& odom) {
-    eskf_->ObserveOdom(odom);
+    if (ieskf_) {
+        ieskf_->ObserveOdom(odom);
+    } else {
+        eskf_->ObserveOdom(odom);
+    }
+}
+
+// 当前滤波器给出的名义位姿（两条路径二选一）
+SE2 Frontend::NominalPose() const {
+    return ieskf_ ? ieskf_->GetNominalPose() : eskf_->GetNominalPose();
 }
 
 // 雷达入口：五步管线
@@ -52,27 +70,54 @@ bool Frontend::ProcessScan(const std::shared_ptr<Frame>& frame) {
     }
 
     // ---- 第 3 步：初值推算 ----
-    // 从缓冲中取「时间上最接近本帧时刻」的 ESKF 预测位姿作为初值。
+    // 从缓冲中取「时间上最接近本帧时刻」的预测位姿作为初值。
     // 0.1s 内 IMU 已推算约 10 步，初值比直接用上一帧位姿更贴近当前真实位姿。
     SE2 pose = imu_buffer_.back().second;
+    SE2 map_pose;
 
-    // ---- 第 4 步：配准 ----
-    bool ok = map_->match(frame, pose);
-    if (!ok) {
-        // 配准失败：保留 ESKF 预测位姿（不跳变），本帧不入图
-        pose = imu_buffer_.back().second;
-        return false;
+    if (ieskf_) {
+        // ---- 第 4/5 步（紧耦合）：配准与滤波合并 ----
+        // 先用当前位姿探一次有效点数：不足则直接失败，不改动滤波器状态。
+        // 这一步避免「观测已注入但配准不可信」的状态不一致 —— 紧耦合无法回滚。
+        Mat8d probe_H = Mat8d::Zero();
+        Vec8d probe_r = Vec8d::Zero();
+        const int probe_pts =
+            map_->ndt().compute_residual_and_jacobians(pose, frame->pts_, probe_H, probe_r);
+        if (probe_pts < options_.map_opts_.ndt_opts_.min_pts_num_) {
+            return false;
+        }
+
+        // 观测函数只累加；迭代、状态注入、协方差更新都在滤波器内部完成。
+        auto obs = [this, &frame](const SE2& input_pose, Mat8d& H, Vec8d& r) {
+            map_->ndt().compute_residual_and_jacobians(input_pose, frame->pts_, H, r);
+        };
+        if (!ieskf_->UpdateUsingCustomObserve(obs)) {
+            return false;
+        }
+        pose = ieskf_->GetNominalPose();
+        // 紧耦合下不存在「配准位姿」与「滤波位姿」两个量，二者是同一个，
+        // 因此 use_filtered_pose_for_map_ 对该路径不产生分支。
+        map_pose = pose;
+    } else {
+        // ---- 第 4 步（松耦合）：NDT 独立配准 ----
+        const bool ok = map_->match(frame, pose);
+        if (!ok) {
+            // 配准失败：保留预测位姿（不跳变），本帧不入图
+            pose = imu_buffer_.back().second;
+            return false;
+        }
+
+        // ---- 第 5 步：修正 ----
+        // 配准结果喂回 ESKF（雷达观测修正），滤波器输出位姿更新。
+        eskf_->ObserveLidar(pose);
+
+        // 入图位姿来源（Options::use_filtered_pose_for_map_）：
+        //   true  -> 滤波后位姿（对齐原版 ndtlio frontend.cpp:35）
+        //   false -> 配准位姿（NDT 输出，未与预测融合）
+        map_pose = options_.use_filtered_pose_for_map_ ? eskf_->GetNominalPose() : pose;
     }
 
-    // ---- 第 5 步：修正与关键帧判定 ----
-    // 配准结果喂回 ESKF（雷达观测修正），滤波器输出位姿更新。
-    eskf_->ObserveLidar(pose);
-
-    // 入图位姿来源（Options::use_filtered_pose_for_map_）：
-    //   true  -> 滤波后位姿（对齐原版 ndtlio frontend.cpp:35）
-    //   false -> 配准位姿（NDT 输出，未与预测融合）
     // 关键帧判定与 last_keyframe_pose_ 使用同一个位姿，保证判定基准与入库基准一致。
-    const SE2 map_pose = options_.use_filtered_pose_for_map_ ? eskf_->GetNominalPose() : pose;
     frame->pose_ = map_pose;
 
     // 关键帧判定：与上一关键帧比平移与转角，达标才入库
@@ -89,14 +134,23 @@ bool Frontend::ProcessScan(const std::shared_ptr<Frame>& frame) {
     return true;
 }
 
-// 当前位姿（ESKF 名义状态，随时可读）
+// 当前位姿（当前滤波器的名义状态，随时可读）
 SE2 Frontend::GetPose() const {
-    return eskf_->GetNominalPose();
+    return NominalPose();
 }
 
-// 静态初始化透传：阶段 1 的零偏结果进入 ESKF
+// 当前后验协方差（两条路径状态维度相同，直接透传）
+Mat8d Frontend::GetP() const {
+    return ieskf_ ? ieskf_->GetP() : eskf_->GetP();
+}
+
+// 静态初始化透传：阶段 1 的零偏结果进入当前滤波器
 void Frontend::SetInitCondition(double bg, const Vec2d& ba) {
-    eskf_->SetInitCondition(bg, ba);
+    if (ieskf_) {
+        ieskf_->SetInitCondition(bg, ba);
+    } else {
+        eskf_->SetInitCondition(bg, ba);
+    }
 }
 
 // 去畸变实现：

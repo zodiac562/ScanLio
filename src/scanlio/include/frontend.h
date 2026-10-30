@@ -3,6 +3,7 @@
 
 #include "scanlio/include/map.h"
 #include "scanlio/src/eskf.hpp"
+#include "scanlio/src/ieskf_2d.hpp"
 #include "scanlio/common/imu.h"
 #include "scanlio/common/odom.h"
 
@@ -15,9 +16,17 @@ namespace sad {
 class Frontend {
    public:
     struct Options {
+        // 滤波器选择。两条路径并列存在，不互相替代：
+        //   kEskf  —— 松耦合，NDT 独立收敛后只把 (x, y, θ) 交给滤波器（历史默认，行为不变）；
+        //   kIeskf —— 紧耦合，NDT 逐点贡献进滤波器，迭代在滤波器内部完成。
+        enum class FilterType { kEskf, kIeskf };
+
         double keyframe_dist_th_ = 0.1;     // 关键帧平移阈值（米）
         double keyframe_rot_th_ = 15.0 * M_PI / 180.0;  // 关键帧旋转阈值（弧度）
         size_t imu_buffer_size_ = 20;       // IMU 位姿缓冲容量（对齐原版）
+
+        // 滤波器路由。默认 kEskf，保证改动前后既有行为逐字节一致。
+        FilterType filter_type_ = FilterType::kEskf;
 
         // 入图位姿来源：
         //   true  —— 用滤波后位姿（ESKF 修正完的名义状态），对齐原版 ndtlio
@@ -33,6 +42,7 @@ class Frontend {
         // 内部持有的两个子系统参数。此前 Frontend 用默认值构造它们，
         // 导致 ESKF 与 NDT 的参数无法从外部配置；此处透传以支持 yaml 统一配置。
         ESKF::Options eskf_opts_;
+        IESKF2D::Options ieskf_opts_;
         Map::Options map_opts_;
     };
 
@@ -48,7 +58,8 @@ class Frontend {
 
     // 当前后验误差协方差（8x8，行列顺序见 eskf.hpp 的 GetP 注释）。
     // 用途：节点发布位姿协方差；只读，不影响滤波器状态。
-    Mat8d GetP() const { return eskf_->GetP(); }
+    // 两条滤波路径的状态维度相同，因此返回类型一致。
+    Mat8d GetP() const;
 
     // 内部地图的只读/读写访问（对应原版 IncrementalNDTLO::getMap）。
     // 用途：外部读取体素坐标与占据栅格以发布可视化话题，或在关键帧之外补写占据栅格。
@@ -61,8 +72,12 @@ class Frontend {
     void SetInitCondition(double bg, const Vec2d& ba);
 
    private:
+    // 按 filter_type_ 读取当前滤波器的名义位姿。两条路径二选一，另一侧为空指针。
+    SE2 NominalPose() const;
+
     Options options_;
     std::shared_ptr<ESKF> eskf_;
+    std::shared_ptr<IESKF2D> ieskf_;
     std::shared_ptr<Map> map_;
 
     bool first_scan_ = true;                 // 首帧雷达标志

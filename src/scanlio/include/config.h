@@ -25,7 +25,14 @@ struct Config {
     Vec2d init_ba = Vec2d(-0.186, 0.054);   // 加计 xy 零偏（m/s^2）
 
     // ---- 滤波（ESKF::Options）----
+    // 语义：[实测] 段内 *_var 键直接作方差使用
     ESKF::Options eskf;
+
+    // ---- 迭代滤波（IESKF2D::Options）----
+    // 语义：段内 *_std 键为标准差，代码内部平方成方差。
+    // 与 eskf 段分成两段的原因就是这两套语义相反，混在一起会静默改变量级。
+    // 启用哪一套由 frontend.filter_type 决定，未选中的那一套不参与计算。
+    IESKF2D::Options ieskf;
 
     // ---- 配准与地图（NDT2D::Options，Map 内部只有一个 NDT2D）----
     NDT2D::Options ndt;
