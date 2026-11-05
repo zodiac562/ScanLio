@@ -20,6 +20,15 @@ include_directories(${EIGEN3_INCLUDE_DIRS})
 find_package(yaml-cpp REQUIRED)
 include_directories(${YAML_CPP_INCLUDE_DIR})
 
+# CERES：位姿图后端的非线性最小二乘求解器（来源 libceres-dev）。
+# 只在后端启用时查找，关闭后端则该包不引入任何 Ceres 依赖。
+# 板载 22.04 需手动 apt install libceres-dev，不走 rosdep（与既有非 ROS 依赖一致）。
+option(SCANLIO_WITH_BACKEND "构建位姿图后端（依赖 Ceres）" ON)
+if(SCANLIO_WITH_BACKEND)
+  find_package(Ceres REQUIRED)
+  message(STATUS "scanlio: Ceres ${CERES_VERSION} 已找到")
+endif()
+
 # ROS 2 节点依赖。只有 node/ 下的可执行文件使用这些依赖；
 # 核心静态库 scanlio_core 不链接任何 ROS 库，离线验证程序仍可在纯环境中构建。
 find_package(rclcpp REQUIRED)
@@ -56,6 +65,33 @@ target_include_directories(scanlio_core PUBLIC
 # Eigen 必须作为 PUBLIC 链接项挂在目标上：公共头文件（eigen_types.h）直接 include
 # <Eigen/Core>，而目录级 include_directories 不会随导出目标传给使用者。
 target_link_libraries(scanlio_core PUBLIC yaml-cpp Eigen3::Eigen)
+
+# ============================================================================
+# 位姿图后端（独立静态库）
+#
+# 为什么与 scanlio_core 分开：
+#   scanlio_core 已通过 ament_export_targets 导出。若在它上面挂 Ceres，
+#   静态库的 PRIVATE 链接项仍会以 $<LINK_ONLY:...> 形式进入导出接口，
+#   于是所有 find_package(scanlio) 的使用方都被要求安装 libceres-dev，
+#   这会改变 v1.0.x 已承诺的接口前提。改为独立静态库后，只有真正
+#   链接后端的可执行文件才需要 Ceres。
+#
+# 为什么要在源文件存在时才建目标：
+#   src/backend/pose_graph.cpp 由 M1 写入。不存在时跳过而不是报错，
+#   与他人 clone 后 test/ 缺失的处理方式一致（见文末验证程序一节）。
+# ============================================================================
+if(SCANLIO_WITH_BACKEND)
+  if(EXISTS "${PROJECT_SOURCE_DIR}/src/backend/pose_graph.cpp")
+    add_library(scanlio_backend STATIC src/backend/pose_graph.cpp)
+    target_include_directories(scanlio_backend PUBLIC
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
+    # Ceres 用 PRIVATE：公共头文件不暴露 ceres 类型，使用方无需 Ceres 头文件。
+    target_link_libraries(scanlio_backend PRIVATE scanlio_core Ceres::ceres)
+    message(STATUS "scanlio: 已启用 scanlio_backend（Ceres ${CERES_VERSION}）")
+  else()
+    message(STATUS "scanlio: 跳过 scanlio_backend（缺 src/backend/pose_graph.cpp）")
+  endif()
+endif()
 
 # 头文件安装：保持 "scanlio/xxx.h" 与 "scanlio/src/xxx.hpp" 的引用形式不变。
 # 源码树里 "scanlio/common/eigen_types.h" 由 -I <包目录>/.. 命中，
@@ -129,6 +165,10 @@ function(scanlio_link_dep target_name pkg)
 endfunction()
 
 target_link_libraries(scanlio_node scanlio_core)
+# 后端尚未写入时该目标不存在，节点行为与 v1.0.1 一致（无回环）。
+if(TARGET scanlio_backend)
+  target_link_libraries(scanlio_node scanlio_backend)
+endif()
 foreach(_sio_dep
     rclcpp sensor_msgs nav_msgs geometry_msgs tf2_ros origincar_msg ament_index_cpp)
   scanlio_link_dep(scanlio_node ${_sio_dep})
@@ -162,6 +202,9 @@ function(scanlio_add_test name)
   endif()
   add_executable(${name} "${SCANLIO_TEST_DIR}/${name}.cpp")
   target_link_libraries(${name} scanlio_core)
+  if(TARGET scanlio_backend)
+    target_link_libraries(${name} scanlio_backend)
+  endif()
   set(SCANLIO_TEST_TARGETS ${SCANLIO_TEST_TARGETS} ${name} PARENT_SCOPE)
 endfunction()
 
