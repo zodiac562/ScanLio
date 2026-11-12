@@ -182,6 +182,14 @@ SE2 ESKF::GetNominalPose() const {
     return SE2(SO2(theta_), p_);
 }
 
+void ESKF::SetPose(const SE2& pose) {
+    p_ = pose.translation();
+    theta_ = pose.so2().log();
+    // 协方差不在此更新。外部改写名义状态不属于 Predict / Observe 的推导
+    // 框架，无对应的 G 变换可用；后端当前也不输出位姿协方差。
+    // 见 doc/复习资料/ESKF/05-局限与实现要点.md 易混淆点 4。
+}
+
 Mat8d ESKF::GetP() const {
     return P_;
 }

@@ -36,6 +36,10 @@ class OccupancyMap {
     // 用一帧点云更新栅格。pose 为本帧位姿（车体系→世界系），pts 为车体系点坐标。
     void add_scan(const SE2& pose, const std::vector<Vec2d>& pts);
 
+    // 清空全部格子计数。用于按新位姿重放全部历史帧来重建栅格。
+    // Map 只存关键帧，全部帧序列由调用方传入（见 Map::RebuildOccupancy）。
+    void clear() { cells_.clear(); }
+
     // 已写入的格子数量（只统计至少被射线访问过一次的格子）
     size_t num_cells() const { return cells_.size(); }
 

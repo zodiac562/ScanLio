@@ -75,6 +75,15 @@ namespace sad{
         }
     }
 
+    void NDT2D::clear() {
+        // grids_ 的 value 是 data_ 的链表迭代器。先清索引，避免留下指向已销毁
+        // 节点的迭代器；再清链表本身。first_scan_ 复位，使重放的第一帧与
+        // 首次建图走同一条路径。
+        grids_.clear();
+        data_.clear();
+        first_scan_ = true;
+    }
+
     void NDT2D::add_scan(const SE2& pose, const std::vector<Eigen::Vector2d>& scan) {
         // 本帧涉及的格子编号集合（set 自动去重：一帧多个点常落入同一格子）
         // less_vec<2>：Vec2i 缺少 < 运算符，用 eigen_types.h 提供的比较器补齐排序能力

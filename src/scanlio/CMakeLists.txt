@@ -215,6 +215,8 @@ if(SCANLIO_WITH_TESTS)
     scanlio_add_test(backend_pose_graph_test)
     scanlio_add_test(calibrate_edge_noise)
   endif()
+  # P2：地图可回改（只依赖 scanlio_core，后端关闭时仍可验证）
+  scanlio_add_test(backend_map_rebuild_test)
   # 阶段0：验证 Sophus 编译链接
   scanlio_add_test(stage0_se2_check)
   # 阶段1：静态初始化（零偏与噪声标定）

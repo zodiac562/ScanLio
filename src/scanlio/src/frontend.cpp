@@ -153,6 +153,40 @@ void Frontend::SetInitCondition(double bg, const Vec2d& ba) {
     }
 }
 
+// 后端优化结果落地（P2）
+void Frontend::ApplyOptimizedPoses(const std::map<size_t, SE2>& poses,
+                                   const SE2& current_pose) {
+    // 优化前的名义位姿与「优化后的当前位姿」之差，是一个世界系刚体变换。
+    // IMU 位姿缓冲只覆盖约 0.2 s，用同一个变换整体搬移是局部近似：
+    // 位姿图的修正在整条轨迹上并非单一刚体变换，但缓冲内各帧相距很近，
+    // 统一搬移能保持它们的相对几何，且使下一帧配准初值与去畸变参考系
+    // 落在优化后的坐标系里。这是通用机制，不针对特定数据集。
+    const SE2 delta = current_pose * NominalPose().inverse();
+
+    // 1. 改写关键帧位姿（poses 未覆盖的关键帧保持不动，由调用方保证覆盖完整）
+    map_->UpdateKeyframePoses(poses);
+
+    // 2. 按新位姿全量重放 NDT 体素。旧体素留在旧世界系会把后续配准拉回去。
+    map_->RebuildNdt();
+
+    // 3. 回写滤波器当前位姿，并同步搬移 IMU 缓冲
+    if (ieskf_) {
+        ieskf_->SetPose(current_pose);
+    } else {
+        eskf_->SetPose(current_pose);
+    }
+    for (auto& item : imu_buffer_) {
+        item.second = delta * item.second;
+    }
+
+    // 4. 同步关键帧判定基准。keyframe_id 随帧序单调递增，故 keyframes()
+    //    的最大键即最近关键帧；取它改写后的位姿，避免下一帧与旧基准比较。
+    const auto& kfs = map_->keyframes();
+    if (!kfs.empty()) {
+        last_keyframe_pose_ = kfs.rbegin()->second->pose_;
+    }
+}
+
 // 去畸变实现：
 //   1. 逐点采集时刻直接取自 frame->pts_time_（导出层按消息自带的
 //      time_increment 与原始 ranges 索引算出），本函数不做任何均匀性假设。

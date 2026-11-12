@@ -40,6 +40,27 @@ class Map {
     // 关键帧数量
     size_t num_keyframes() const { return keyframes_.size(); }
 
+    // 关键帧库的只读访问（按 keyframe_id 升序）。
+    // 用途：后端建位姿图时按此顺序取节点初值；回环检测取候选邻域点云；
+    // 优化后重建地图时按此顺序重放。
+    // 返回的是 Frame 的 shared_ptr，调用方可读全部字段。写 pose_ 请走
+    // UpdateKeyframePoses，不要直接改，以免与 NDT 体素不同步。
+    const std::map<size_t, std::shared_ptr<Frame>>& keyframes() const { return keyframes_; }
+
+    // 用后端优化结果改写关键帧位姿。poses 的键为 keyframe_id；
+    // 库中不存在的键忽略。返回实际改写的帧数。
+    // 只改 pose_，不动 pts_；调用方需随后调用 RebuildNdt。
+    size_t UpdateKeyframePoses(const std::map<size_t, SE2>& poses);
+
+    // 清空 NDT 体素，按 keyframes() 当前的 pose_ 全量重放。
+    // 位姿未变时，重建结果与重建前逐元素一致（专项测试判据）。
+    void RebuildNdt();
+
+    // 清空占据栅格，按给定帧序列全量重放。
+    // Map 只保存关键帧，而栅格原本是每帧写入的（见 node/scanlio_node.cpp），
+    // 故全部帧序列必须由调用方提供；用关键帧序列重建会丢失非关键帧的贡献。
+    void RebuildOccupancy(const std::vector<std::shared_ptr<Frame>>& frames);
+
     // 暴露内部NDT
     NDT2D& ndt() { return ndt_; }
     // 只读版本：供发布全局点云等只读用途

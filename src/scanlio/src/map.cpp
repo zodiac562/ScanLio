@@ -18,6 +18,35 @@ void Map::add_scan_to_occupancy_map(const std::shared_ptr<Frame>& frame) {
     occu_map_.add_scan(frame->pose_, frame->pts_);
 }
 
+size_t Map::UpdateKeyframePoses(const std::map<size_t, SE2>& poses) {
+    size_t updated = 0;
+    for (auto& kv : keyframes_) {
+        const auto it = poses.find(kv.first);
+        if (it == poses.end()) {
+            continue;
+        }
+        kv.second->pose_ = it->second;
+        ++updated;
+    }
+    return updated;
+}
+
+void Map::RebuildNdt() {
+    ndt_.clear();
+    // std::map 按 keyframe_id 升序遍历，与首次建图的写入顺序一致；
+    // NDT 的 LRU 链表因此恢复到「最近更新的关键帧在头部」的状态。
+    for (const auto& kv : keyframes_) {
+        ndt_.add_scan(kv.second->pose_, kv.second->pts_);
+    }
+}
+
+void Map::RebuildOccupancy(const std::vector<std::shared_ptr<Frame>>& frames) {
+    occu_map_.clear();
+    for (const auto& f : frames) {
+        occu_map_.add_scan(f->pose_, f->pts_);
+    }
+}
+
 // 用当前地图配准：给定初值 pose，返回配准后位姿与配准是否成功
 bool Map::match(std::shared_ptr<Frame> frame, SE2& pose) {
     // pose 传入时为初值（来自 ESKF 预测，世界系位姿）；

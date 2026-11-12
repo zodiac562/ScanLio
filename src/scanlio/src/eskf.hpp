@@ -34,6 +34,15 @@ namespace sad{
         void ObserveLidar(const SE2& lidar_pose);
         SE2 GetNominalPose() const;
 
+        // 外部回写位姿（后端优化结果）。只改位置 p_ 与航向 theta_。
+        // 不动 v_、bg_、ba_、P_、inited_、last_imu_time_。
+        // 依据 doc/复习资料/ESKF/05-局限与实现要点.md 易混淆点 4：
+        // 外部改写不在滤波方程的推导框架内，没有对应的协方差更新式；
+        // 后端目前也不提供位姿协方差，故此处不凭空构造 P 的变换。
+        // 这是一处已声明的语义缺口，不是遗漏；判据见
+        // test/backend_map_rebuild_test.cpp 的 T7。
+        void SetPose(const SE2& pose);
+
         // 后验误差协方差（8x8，按值返回）。
         // 各分量的行列顺序与误差状态一致：0~1 = p_x,p_y；2~3 = v_x,v_y；4 = theta；
         // 5 = bg（陀螺 z 轴零偏）；6~7 = ba_x,ba_y（加计 xy 零偏）。

@@ -170,6 +170,14 @@ bool IESKF2D::UpdateUsingCustomObserve(const CustomObsFunc& obs) {
     return true;
 }
 
+void IESKF2D::SetPose(const SE2& pose) {
+    p_ = pose.translation();
+    theta_ = WrapToPi(pose.so2().log());
+    // 不动 v_、bg_、ba_、P_、dx_、inited_、last_imu_time_。
+    // 特别地，不改 inited_ 与 last_imu_time_：回写发生在运行期，
+    // 下一条 IMU 的时间基准必须保持连续，否则 dt 会被算错。
+}
+
 Vec8d IESKF2D::GetNominal() const {
     Vec8d x = Vec8d::Zero();
     x.block<2, 1>(0, 0) = p_;

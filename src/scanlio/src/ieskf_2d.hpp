@@ -85,6 +85,13 @@ class IESKF2D {
     // 紧耦合观测更新：内部按 num_iterations_ 次反复线性化并注入名义状态。
     bool UpdateUsingCustomObserve(const CustomObsFunc& obs);
 
+    // 外部回写位姿（后端优化结果）。只改 p_ 与 theta_，
+    // 不动 v_、bg_、ba_、P_、dx_、inited_、last_imu_time_。
+    // 与 SetState 的区别：SetState 会置 inited_ 并覆盖时间基准，
+    // 使下一条 IMU 直接参与积分，语义是「单元测试给初值」，不能用于在线回写。
+    // 协方差不更新的理由同 ESKF::SetPose（见 doc/复习资料/ESKF/05 易混淆点 4）。
+    void SetPose(const SE2& pose);
+
     SE2 GetNominalPose() const { return SE2(SO2(theta_), p_); }
 
     // 名义状态按 8 维向量返回：p(0~1) v(2~3) θ(4) bg(5) ba(6~7)

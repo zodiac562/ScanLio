@@ -8,6 +8,7 @@
 #include "scanlio/common/odom.h"
 
 #include <deque>
+#include <map>
 #include <memory>
 
 namespace sad {
@@ -70,6 +71,25 @@ class Frontend {
 
     // 静态初始化（阶段 1 产物传入）：透传给内部 ESKF
     void SetInitCondition(double bg, const Vec2d& ba);
+
+    // 后端优化结果落地（P2）。poses 的键为 keyframe_id，值优化后的世界系位姿；
+    // current_pose 为「当前帧」优化后位姿，用于回写滤波器名义状态。
+    //
+    // 执行顺序固定为四步：
+    //   1. 按 poses 改写关键帧位姿，未出现在 poses 中的关键帧保持不动
+    //   2. 清空并按新位姿全量重放 NDT 体素
+    //   3. 回写滤波器当前位姿；同时把 IMU 位姿缓冲按同一个世界系变换整体搬移，
+    //      否则下一帧的配准初值与去畸变参考系仍留在优化前的坐标系里
+    //   4. 同步 last_keyframe_pose_，否则下一帧关键帧判定会与旧基准比较
+    //
+    // 只回写位置与航向，不回写速度、零偏、协方差。依据见
+    // doc/复习资料/ESKF/05-局限与实现要点.md 易混淆点 4：
+    // 外部改写名义状态不在滤波推导框架内，没有对应的协方差更新式；
+    // 后端当前也不输出位姿协方差。这是已声明的语义缺口，不是遗漏。
+    //
+    // 占据栅格不在本函数内重建：Map 只存关键帧，而栅格原本每帧写入，
+    // 调用方须持有全部帧序列并另行调用 Map::RebuildOccupancy。
+    void ApplyOptimizedPoses(const std::map<size_t, SE2>& poses, const SE2& current_pose);
 
    private:
     // 按 filter_type_ 读取当前滤波器的名义位姿。两条路径二选一，另一侧为空指针。

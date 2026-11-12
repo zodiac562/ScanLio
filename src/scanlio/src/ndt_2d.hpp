@@ -64,6 +64,12 @@ namespace sad{
         */
         void add_scan(const SE2& pose, const std::vector<Eigen::Vector2d>& scan);
 
+        // 清空全部体素与索引，回到「尚未收到第一帧」的状态。
+        // 用途：后端优化改写关键帧位姿后，按新位姿从关键帧库全量重放建图。
+        // 必须先清 grids_ 再清 data_：grids_ 里存的是 data_ 的链表迭代器，
+        // 只清其中一个会留下悬垂引用。
+        void clear();
+
         /*
         配准函数
         输入初始位姿，激光数据
