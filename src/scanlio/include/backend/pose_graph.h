@@ -26,6 +26,7 @@
 #include "scanlio/common/eigen_types.h"
 
 #include <cstddef>
+#include <string>
 #include <vector>
 
 namespace sad {
@@ -37,14 +38,24 @@ class PoseGraph {
     double function_tolerance = 1e-6;   // 代价相对下降量停止阈值
     double parameter_tolerance = 1e-8;  // 步长相对模停止阈值
 
-    // 稳健核开关。默认关闭，理由见 03 §3.3：
-    //   Huber 的阈值 delta 只有在「权重已归一化为协方差的逆、sqrt(r^T W r)
-    //   成为无量纲马氏距离」时才有物理含义。当前权重是人为设定值，
-    //   开启后 delta 落在数据实际量级之外，会出现「核永不激活」或
-    //   「全部降权」两种失效，且都不报错。因此默认关闭，待权重定标后再开。
-    bool enable_robust = false;
-    double huber_delta = 1.0;
+    // 稳健核。权重已由 EstimateOmega 从实测样本定标（W = Sigma^-1），
+    // 故 sqrt(r^T W r) 是无量纲马氏距离。Ceres 比较的是三维残差块的模，
+    // 其平方服从自由度 3 的卡方分布，故 delta 取 sqrt(chi2(3, 0.95))，
+    // 对应约 5% 的正确边进入降权区；chi2(3, 0.99) 留给删边判据。
+    // 默认开启；若调用方传入的 omega_diag 不是 1/sigma^2，须显式关闭，
+    // 否则会出现 03 §3.3 描述的「核永不激活」或「全部降权」两种静默失效。
+    bool enable_robust = true;
+    double huber_delta = 2.795484;  // = sqrt(7.814728) = sqrt(chi2(3, 0.95))
   };
+
+  // 从残差样本估计对角信息矩阵 W = Sigma^-1 的对角元。
+  //   samples[t] 是一条同类边的一次残差 (rx, ry, rtheta)，
+  //   来源须独立于节点初值（见 P1 块 2 §2.5）。
+  // 逐分量用 n-1 分母算样本方差，再取倒数。
+  // 样本数 < 2、或任一分量方差非正（例如全零）时返回 false 并写 err，
+  // 不静默给出兜底值。
+  static bool EstimateOmega(const std::vector<Eigen::Vector3d>& samples,
+                            Eigen::Vector3d* omega_diag, std::string* err);
 
   // 一条边：两个节点序号 + 相对位姿观测 + 三个分量的权重。
   //   z 的三个分量依次为 zx(m)、zy(m)、ztheta(rad)，
@@ -72,6 +83,11 @@ class PoseGraph {
 
   SE2 pose(std::size_t i) const;
   std::vector<SE2> poses() const;
+
+  // 各边在当前节点值下的马氏残差范数 sqrt(r^T W r)，顺序与 AddEdge 一致。
+  // 无量纲，单位为标准差个数；用于核对 Huber 的激活边数占比。
+  // 只读，不改变内部状态。
+  std::vector<double> EdgeResidualNorms() const;
 
   // 求解。节点数不足 2 或边数为 0 时返回 false（无事可做）。
   // 返回 Ceres 是否报告收敛；数值结果无论真假都已写回内部状态。

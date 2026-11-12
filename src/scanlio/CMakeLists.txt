@@ -210,9 +210,10 @@ endfunction()
 
 if(SCANLIO_WITH_TESTS)
   message(STATUS "scanlio: 验证程序目录 ${SCANLIO_TEST_DIR}")
-  # 后端 M1：位姿图（依赖 scanlio_backend，后端关闭时该目标不存在）
+  # 后端 M1 / P1：位姿图与边权重标定（依赖 scanlio_backend，后端关闭时两目标都不存在）
   if(TARGET scanlio_backend)
     scanlio_add_test(backend_pose_graph_test)
+    scanlio_add_test(calibrate_edge_noise)
   endif()
   # 阶段0：验证 Sophus 编译链接
   scanlio_add_test(stage0_se2_check)

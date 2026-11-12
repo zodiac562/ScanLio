@@ -4,6 +4,7 @@
 #include <ceres/loss_function.h>
 
 #include <cmath>
+#include <limits>
 
 namespace sad {
 
@@ -58,6 +59,51 @@ struct EdgeCost {
 
 }  // namespace
 
+bool PoseGraph::EstimateOmega(const std::vector<Eigen::Vector3d>& samples,
+                              Eigen::Vector3d* omega_diag, std::string* err) {
+  if (omega_diag == nullptr) {
+    if (err) *err = "omega_diag 输出指针为空";
+    return false;
+  }
+  const std::size_t n = samples.size();
+  if (n < 2) {
+    if (err) *err = "样本数少于 2，无法估计方差（分母 n-1 无意义）";
+    return false;
+  }
+
+  // 逐分量求样本均值。写全三个分量，不用 Eigen 的均值表达式，
+  // 避免与 Jet 求导路径混淆。
+  Eigen::Vector3d mean = Eigen::Vector3d::Zero();
+  for (const auto& s : samples) {
+    mean += s;
+  }
+  mean /= static_cast<double>(n);
+
+  Eigen::Vector3d var = Eigen::Vector3d::Zero();
+  for (const auto& s : samples) {
+    const Eigen::Vector3d d = s - mean;
+    var[0] += d[0] * d[0];
+    var[1] += d[1] * d[1];
+    var[2] += d[2] * d[2];
+  }
+  var /= static_cast<double>(n - 1);
+
+  if (!(var.array() > 0.0).all()) {
+    if (err) {
+      *err = "存在方差非正的残差分量；这类样本不含离散信息，"
+             "不给出兜底权重（见 P1 块 2 §2.5：样本须独立于节点初值）";
+    }
+    return false;
+  }
+  if (!(var.array().isFinite()).all()) {
+    if (err) *err = "样本方差含非有限值";
+    return false;
+  }
+
+  *omega_diag = var.cwiseInverse();
+  return true;
+}
+
 int PoseGraph::AddNode(const SE2& pose) {
   params_.push_back(pose.translation().x());
   params_.push_back(pose.translation().y());
@@ -100,6 +146,21 @@ std::vector<SE2> PoseGraph::poses() const {
   out.reserve(num_nodes());
   for (std::size_t k = 0; k < num_nodes(); ++k) {
     out.push_back(pose(k));
+  }
+  return out;
+}
+
+std::vector<double> PoseGraph::EdgeResidualNorms() const {
+  std::vector<double> out;
+  out.reserve(edges_.size());
+  for (const Edge& e : edges_) {
+    const Eigen::Vector3d sw = e.omega_diag.cwiseSqrt();
+    EdgeCost cost(e.z, sw);
+    double res[3] = {0.0, 0.0, 0.0};
+    // EdgeCost 是模板仿函数，以 double 实例化即得到与 Ceres 内部完全一致的
+    // 残差表达式（同一份代码，不另写一份），保证诊断值与实际代价同源。
+    cost(params_.data() + 3 * e.i, params_.data() + 3 * e.j, res);
+    out.push_back(std::sqrt(res[0] * res[0] + res[1] * res[1] + res[2] * res[2]));
   }
   return out;
 }
