@@ -83,11 +83,14 @@ target_link_libraries(scanlio_core PUBLIC yaml-cpp Eigen3::Eigen)
 if(SCANLIO_WITH_BACKEND)
   if(EXISTS "${PROJECT_SOURCE_DIR}/src/backend/pose_graph.cpp")
     add_library(scanlio_backend STATIC
-      src/backend/pose_graph.cpp src/backend/loop_closure.cpp)
+      src/backend/pose_graph.cpp src/backend/loop_closure.cpp
+      src/backend/backend_pipeline.cpp)
     target_include_directories(scanlio_backend PUBLIC
       $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
     # Ceres 用 PRIVATE：公共头文件不暴露 ceres 类型，使用方无需 Ceres 头文件。
     target_link_libraries(scanlio_backend PRIVATE scanlio_core Ceres::ceres)
+    # 节点用该宏条件编译回环接线；后端关闭时节点代码里不出现任何 backend 符号。
+    target_compile_definitions(scanlio_backend PUBLIC SCANLIO_HAS_BACKEND=1)
     message(STATUS "scanlio: 已启用 scanlio_backend（Ceres ${CERES_VERSION}）")
   else()
     message(STATUS "scanlio: 跳过 scanlio_backend（缺 src/backend/pose_graph.cpp）")
@@ -217,6 +220,7 @@ if(SCANLIO_WITH_TESTS)
     scanlio_add_test(backend_pose_graph_test)
     scanlio_add_test(calibrate_edge_noise)
     scanlio_add_test(loop_closure_test)
+    scanlio_add_test(backend_pipeline_test)
   endif()
   # P2：地图可回改（只依赖 scanlio_core，后端关闭时仍可验证）
   scanlio_add_test(backend_map_rebuild_test)

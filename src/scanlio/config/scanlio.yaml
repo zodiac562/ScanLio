@@ -111,3 +111,38 @@ frontend:
   enable_undistort: true          # [实测] 雷达去畸变总开关
   filter_type: eskf               # [默认] 滤波器路由：eskf（松耦合，默认，行为不变）| ieskf（紧耦合）
                                   #        两条路径并列存在，切换只改此项，不改代码
+
+# ---------------------------------------------------------------------------
+# 回环与后端接线（P4）
+#
+# enable 默认 false：开启后节点每新增 optimize_every_n_keyframes 个关键帧，
+# 执行一次「回环检测 → 位姿图求解 → 位姿回写 → 地图与轨迹重建」。
+# 关闭时节点行为与 v1.3.0 逐位一致。
+#
+# 门控、描述子规模、子图窗口均为【推断】的设计值，未在实机数据上验证。
+# 六个 omega 为【实测】：由 test/calibrate_edge_noise.cpp 从 imu_static
+# 静止段估出的两类边信息矩阵对角元，含义见 doc/复习资料/位姿图优化/01 §1.6。
+# ---------------------------------------------------------------------------
+loop:
+  enable: false
+  optimize_every_n_keyframes: 10
+  max_distance: 3.0
+  min_index_gap: 20
+  max_heading_diff_deg: 30.0
+  rings: 20
+  sectors: 60
+  max_range: 20.0
+  min_similarity: 0.0
+  max_candidates: 3
+  submap_half_window: 2
+  odom_omega_x: 13850773.464537829
+  odom_omega_y: 644915.17350063322
+  odom_omega_t: 17712925.894549124
+  loop_omega_x: 417352.9587567249
+  loop_omega_y: 151339.27485489356
+  loop_omega_t: 362679.49452188675
+  max_iterations: 50
+  function_tolerance: 1.0e-6
+  parameter_tolerance: 1.0e-8
+  enable_robust: true
+  huber_delta: 2.795484

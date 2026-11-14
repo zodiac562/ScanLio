@@ -80,8 +80,9 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
         return false;
     }
 
-    // 顶层只允许 init / eskf / ieskf / ndt / map / frontend 六个段
-    if (!CheckKeys(root, "根节点", {"init", "eskf", "ieskf", "ndt", "map", "frontend"}, err)) {
+    // 顶层七个段。loop 是 P4 新增，缺省时整段沿用代码默认值（enable=false）。
+    if (!CheckKeys(root, "根节点",
+                   {"init", "eskf", "ieskf", "ndt", "map", "frontend", "loop"}, err)) {
         return false;
     }
 
@@ -192,6 +193,45 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
         GetB(nf, "use_filtered_pose_for_map", frontend.use_filtered_pose_for_map_);
     frontend.enable_undistort_ = GetB(nf, "enable_undistort", frontend.enable_undistort_);
 
+    // ---- loop：回环与后端接线（P4）----
+    // 键名与 LoopConfig 字段一一对应；角度用「度」书写、结构体存度，
+    // 在转换成 LoopClosure::Options 时才乘 M_PI/180，避免两处换算。
+    if (!CheckKeys(root["loop"], "loop",
+                   {"enable", "optimize_every_n_keyframes", "max_distance",
+                    "min_index_gap", "max_heading_diff_deg", "rings", "sectors",
+                    "max_range", "min_similarity", "max_candidates",
+                    "submap_half_window", "odom_omega_x", "odom_omega_y",
+                    "odom_omega_t", "loop_omega_x", "loop_omega_y", "loop_omega_t",
+                    "max_iterations", "function_tolerance", "parameter_tolerance",
+                    "enable_robust", "huber_delta"},
+                   err)) {
+        return false;
+    }
+    const YAML::Node nl = root["loop"];
+    loop.enable = GetB(nl, "enable", loop.enable);
+    loop.optimize_every_n_keyframes =
+        GetI(nl, "optimize_every_n_keyframes", loop.optimize_every_n_keyframes);
+    loop.max_distance = GetD(nl, "max_distance", loop.max_distance);
+    loop.min_index_gap = GetI(nl, "min_index_gap", loop.min_index_gap);
+    loop.max_heading_diff_deg = GetD(nl, "max_heading_diff_deg", loop.max_heading_diff_deg);
+    loop.rings = GetI(nl, "rings", loop.rings);
+    loop.sectors = GetI(nl, "sectors", loop.sectors);
+    loop.max_range = GetD(nl, "max_range", loop.max_range);
+    loop.min_similarity = GetD(nl, "min_similarity", loop.min_similarity);
+    loop.max_candidates = GetI(nl, "max_candidates", loop.max_candidates);
+    loop.submap_half_window = GetI(nl, "submap_half_window", loop.submap_half_window);
+    loop.odom_omega.x() = GetD(nl, "odom_omega_x", loop.odom_omega.x());
+    loop.odom_omega.y() = GetD(nl, "odom_omega_y", loop.odom_omega.y());
+    loop.odom_omega.z() = GetD(nl, "odom_omega_t", loop.odom_omega.z());
+    loop.loop_omega.x() = GetD(nl, "loop_omega_x", loop.loop_omega.x());
+    loop.loop_omega.y() = GetD(nl, "loop_omega_y", loop.loop_omega.y());
+    loop.loop_omega.z() = GetD(nl, "loop_omega_t", loop.loop_omega.z());
+    loop.max_iterations = GetI(nl, "max_iterations", loop.max_iterations);
+    loop.function_tolerance = GetD(nl, "function_tolerance", loop.function_tolerance);
+    loop.parameter_tolerance = GetD(nl, "parameter_tolerance", loop.parameter_tolerance);
+    loop.enable_robust = GetB(nl, "enable_robust", loop.enable_robust);
+    loop.huber_delta = GetD(nl, "huber_delta", loop.huber_delta);
+
     // ---- 数值合法性（明显错误的配置尽早暴露）----
     if (ndt.voxel_size_ <= 0.0) {
         if (err) *err = "ndt.voxel_size 必须为正";
@@ -229,6 +269,31 @@ bool Config::LoadFromYaml(const std::string& path, std::string* err) {
     if (frontend.imu_buffer_size_ < 2) {
         // 去畸变插值需要至少两条位姿
         if (err) *err = "frontend.imu_buffer_size 不得小于 2（插值需要两条位姿）";
+        return false;
+    }
+    // loop 段关闭时也要自洽：一旦在实机上开启，非法值会直接产生错误结果。
+    if (loop.optimize_every_n_keyframes < 1) {
+        if (err) *err = "loop.optimize_every_n_keyframes 不得小于 1";
+        return false;
+    }
+    if (loop.max_distance <= 0.0 || loop.min_index_gap < 1 ||
+        loop.max_heading_diff_deg <= 0.0 || loop.max_heading_diff_deg > 180.0) {
+        if (err) *err = "loop 的 max_distance / min_index_gap / max_heading_diff_deg 越界";
+        return false;
+    }
+    if (loop.rings < 1 || loop.sectors < 1 || loop.max_range <= 0.0 ||
+        loop.max_candidates < 1 || loop.submap_half_window < 0) {
+        if (err) *err = "loop 的 rings / sectors / max_range / max_candidates / submap_half_window 越界";
+        return false;
+    }
+    if (!(loop.odom_omega.array() > 0.0).all() ||
+        !(loop.loop_omega.array() > 0.0).all()) {
+        if (err) *err = "loop 的六个 omega 分量必须为正";
+        return false;
+    }
+    if (loop.max_iterations < 1 || loop.function_tolerance <= 0.0 ||
+        loop.parameter_tolerance <= 0.0 || loop.huber_delta <= 0.0) {
+        if (err) *err = "loop 的求解器参数必须为正";
         return false;
     }
     return true;
@@ -280,6 +345,29 @@ std::string Config::ToYamlString() const {
     os << "  filter_type: "
        << (frontend.filter_type_ == Frontend::Options::FilterType::kIeskf ? "ieskf" : "eskf")
        << "\n";
+    os << "loop:\n";
+    os << "  enable: " << (loop.enable ? "true" : "false") << "\n";
+    os << "  optimize_every_n_keyframes: " << loop.optimize_every_n_keyframes << "\n";
+    os << "  max_distance: " << loop.max_distance << "\n";
+    os << "  min_index_gap: " << loop.min_index_gap << "\n";
+    os << "  max_heading_diff_deg: " << loop.max_heading_diff_deg << "\n";
+    os << "  rings: " << loop.rings << "\n";
+    os << "  sectors: " << loop.sectors << "\n";
+    os << "  max_range: " << loop.max_range << "\n";
+    os << "  min_similarity: " << loop.min_similarity << "\n";
+    os << "  max_candidates: " << loop.max_candidates << "\n";
+    os << "  submap_half_window: " << loop.submap_half_window << "\n";
+    os << "  odom_omega_x: " << loop.odom_omega.x() << "\n";
+    os << "  odom_omega_y: " << loop.odom_omega.y() << "\n";
+    os << "  odom_omega_t: " << loop.odom_omega.z() << "\n";
+    os << "  loop_omega_x: " << loop.loop_omega.x() << "\n";
+    os << "  loop_omega_y: " << loop.loop_omega.y() << "\n";
+    os << "  loop_omega_t: " << loop.loop_omega.z() << "\n";
+    os << "  max_iterations: " << loop.max_iterations << "\n";
+    os << "  function_tolerance: " << loop.function_tolerance << "\n";
+    os << "  parameter_tolerance: " << loop.parameter_tolerance << "\n";
+    os << "  enable_robust: " << (loop.enable_robust ? "true" : "false") << "\n";
+    os << "  huber_delta: " << loop.huber_delta << "\n";
     return os.str();
 }
 

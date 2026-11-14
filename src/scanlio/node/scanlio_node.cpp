@@ -38,6 +38,12 @@
 #include "scanlio/include/frame.h"
 #include "scanlio/include/frontend.h"
 
+// 后端接线（P4）。SCANLIO_HAS_BACKEND 由 scanlio_backend 目标 PUBLIC 传播；
+// 用 -DSCANLIO_WITH_BACKEND=OFF 构建时目标不存在，节点里不出现任何 backend 符号。
+#ifdef SCANLIO_HAS_BACKEND
+#include "scanlio/include/backend/backend_pipeline.h"
+#endif
+
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -233,6 +239,10 @@ class ScanLioNode : public rclcpp::Node {
                     occ_topic.c_str(), publish_occupancy_ ? "开" : "关", cloud_topic.c_str(),
                     publish_cloud_ ? "开" : "关", pose_cov_topic.c_str(),
                     publish_pose_cov_ ? "开" : "关", publish_period_ms);
+#ifdef SCANLIO_HAS_BACKEND
+        RCLCPP_INFO(this->get_logger(), "回环后端：%s（每 %d 个关键帧触发一次）",
+                    cfg_.loop.enable ? "开" : "关", cfg_.loop.optimize_every_n_keyframes);
+#endif
     }
 
     ~ScanLioNode() override {
@@ -264,6 +274,11 @@ class ScanLioNode : public rclcpp::Node {
                         frontend_->GetMap().ndt().get_voxels().size(),
                         frontend_->GetMap().occupancy_map().num_cells());
         }
+#ifdef SCANLIO_HAS_BACKEND
+        RCLCPP_INFO(this->get_logger(),
+                    "回环后端统计：触发 %zu 次，成功落地 %zu 次，缓存帧 %zu",
+                    backend_attempts_, backend_successes_, all_frames_.size());
+#endif
     }
 
    private:
@@ -509,7 +524,70 @@ class ScanLioNode : public rclcpp::Node {
         if (publish_pose_cov_) {
             PublishPoseCov(frame->pose_, t);
         }
+
+#ifdef SCANLIO_HAS_BACKEND
+        // 全部成功配准帧按帧序保存。Map 只存关键帧，而回环落地后重建占据栅格
+        // 需要全部帧；仅在回环启用时才保存，关闭时零额外内存开销。
+        if (cfg_.loop.enable) {
+            all_frames_.push_back(frame);
+            const size_t n_kf = frontend_->GetMap().num_keyframes();
+            if (n_kf >= last_backend_keyframe_count_ + static_cast<size_t>(
+                    cfg_.loop.optimize_every_n_keyframes)) {
+                last_backend_keyframe_count_ = n_kf;
+                RunBackendOnce(frame, t);
+            }
+        }
+#endif
     }
+
+#ifdef SCANLIO_HAS_BACKEND
+    // 一次回环后端动作。检测、求解与落地都在 backend_pipeline 内完成；
+    // 本函数只负责「成功后把节点持有的发布状态同步到新位姿」。
+    void RunBackendOnce(const std::shared_ptr<sad::Frame>& frame, double t) {
+        sad::BackendResult res;
+        const bool ok = sad::RunBackend(*frontend_, all_frames_, frame, cfg_.loop,
+                                       cfg_.ndt, &res);
+        ++backend_attempts_;
+        if (!ok) {
+            RCLCPP_DEBUG(this->get_logger(),
+                         "回环后端未落地：%s（节点=%d 里程计边=%d 回环边=%d）",
+                         res.reason.c_str(), res.num_nodes, res.num_odom_edges,
+                         res.num_loop_edges);
+            return;
+        }
+        ++backend_successes_;
+
+        // Path 是累计发布的：回环改写了历史位姿，必须整体替换而不是追加，
+        // 否则前段仍是优化前的位姿，rviz 上会出现断层。
+        RebuildTrajectoryFromFrames();
+        path_pub_->publish(trajectory_);
+
+        // 当前帧的 TF 用优化后位姿重发一次；栅格与点云由定时器按新地图发布。
+        if (publish_tf_) {
+            tf_broadcaster_->sendTransform(
+                MakeTransform(map_frame_, base_frame_, t, frame->pose_));
+        }
+        RCLCPP_INFO(this->get_logger(),
+                    "回环后端完成：节点=%d 里程计边=%d 回环边=%d 最大位姿修正=%.4f m",
+                    res.num_nodes, res.num_odom_edges, res.num_loop_edges,
+                    res.max_pose_shift);
+    }
+
+    // 用 all_frames_ 的新位姿逐项覆盖 Path。header.stamp 保留原值：
+    // 位姿变了，但采样时刻没变。
+    void RebuildTrajectoryFromFrames() {
+        const size_t n = std::min(trajectory_.poses.size(), all_frames_.size());
+        for (size_t k = 0; k < n; ++k) {
+            const SE2& p = all_frames_[k]->pose_;
+            const double theta = p.so2().log();
+            auto& ps = trajectory_.poses[k];
+            ps.pose.position.x = p.translation().x();
+            ps.pose.position.y = p.translation().y();
+            ps.pose.orientation.z = std::sin(theta * 0.5);
+            ps.pose.orientation.w = std::cos(theta * 0.5);
+        }
+    }
+#endif
 
     void FinishStaticInit() {
         const Vec3d bg = imu_init_->GetInitBg();
@@ -733,6 +811,15 @@ class ScanLioNode : public rclcpp::Node {
     double cloud_cost_total_ms_ = 0.0;
     double cloud_cost_max_ms_ = 0.0;
     size_t cloud_cost_count_ = 0;
+
+#ifdef SCANLIO_HAS_BACKEND
+    // ---- 回环后端接线（P4）----
+    // 全部成功配准帧，按帧序保存；仅在 loop.enable 为真时填充。
+    std::vector<std::shared_ptr<sad::Frame>> all_frames_;
+    size_t last_backend_keyframe_count_ = 0;
+    size_t backend_attempts_ = 0;
+    size_t backend_successes_ = 0;
+#endif
 
     // ---- 统计 ----
     size_t imu_count_ = 0;
