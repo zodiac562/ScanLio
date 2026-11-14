@@ -82,7 +82,8 @@ target_link_libraries(scanlio_core PUBLIC yaml-cpp Eigen3::Eigen)
 # ============================================================================
 if(SCANLIO_WITH_BACKEND)
   if(EXISTS "${PROJECT_SOURCE_DIR}/src/backend/pose_graph.cpp")
-    add_library(scanlio_backend STATIC src/backend/pose_graph.cpp)
+    add_library(scanlio_backend STATIC
+      src/backend/pose_graph.cpp src/backend/loop_closure.cpp)
     target_include_directories(scanlio_backend PUBLIC
       $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>)
     # Ceres 用 PRIVATE：公共头文件不暴露 ceres 类型，使用方无需 Ceres 头文件。
@@ -210,10 +211,12 @@ endfunction()
 
 if(SCANLIO_WITH_TESTS)
   message(STATUS "scanlio: 验证程序目录 ${SCANLIO_TEST_DIR}")
-  # 后端 M1 / P1：位姿图与边权重标定（依赖 scanlio_backend，后端关闭时两目标都不存在）
+  # 后端 M1 / P1 / P3：位姿图、边权重标定、回环检测
+  # （依赖 scanlio_backend，后端关闭时三目标都不存在）
   if(TARGET scanlio_backend)
     scanlio_add_test(backend_pose_graph_test)
     scanlio_add_test(calibrate_edge_noise)
+    scanlio_add_test(loop_closure_test)
   endif()
   # P2：地图可回改（只依赖 scanlio_core，后端关闭时仍可验证）
   scanlio_add_test(backend_map_rebuild_test)
